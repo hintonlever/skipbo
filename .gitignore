@@ -1,0 +1,9 @@
+build/
+emsdk/
+web/node_modules/
+web/dist/
+web/public/wasm/*.js
+web/public/wasm/*.wasm
+*.o
+*.a
+.DS_Store
