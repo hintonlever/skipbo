@@ -163,6 +163,16 @@ bool Game::apply_move(const Move& move) {
     return true;
 }
 
+// Draw cards from draw pile into a player's hand (for simulation path).
+static void draw_cards_from_pile(GameState& state, int player_id, int count) {
+    auto& player = state.players[player_id];
+    for (int i = 0; i < count; ++i) {
+        if (state.draw_pile.empty()) break;
+        player.hand[player.hand_count++] = state.draw_pile.back();
+        state.draw_pile.pop_back();
+    }
+}
+
 bool Game::apply_move_to_state(GameState& state, const Move& move) {
     uint8_t acting_player = state.current_player;
     if (!move_card(state, move)) return false;
@@ -174,18 +184,28 @@ bool Game::apply_move_to_state(GameState& state, const Move& move) {
         return true;
     }
 
-    // Building pile completion (simplified: just clear, no recycling)
+    // Building pile completion — recycle into draw pile
     if (!move.is_discard()) {
         int bi = move.target_building_index();
         auto& bp = state.building_piles[bi];
         if (bp.size() >= static_cast<size_t>(CARD_MAX)) {
+            state.draw_pile.insert(state.draw_pile.end(), bp.begin(), bp.end());
             bp.clear();
         }
     }
 
-    // If discard, switch player
+    // If all hand cards played, draw 5 more (same turn continues)
+    if (!move.is_discard() && state.players[acting_player].hand_count == 0) {
+        draw_cards_from_pile(state, acting_player, HAND_SIZE);
+    }
+
+    // If discard, switch player and draw cards for new player
     if (move.is_discard()) {
         state.current_player = 1 - state.current_player;
+        int need = HAND_SIZE - state.players[state.current_player].hand_count;
+        if (need > 0) {
+            draw_cards_from_pile(state, state.current_player, need);
+        }
     }
 
     return true;
