@@ -7,6 +7,7 @@ interface CardViewProps {
   highlighted?: boolean;
   small?: boolean;
   label?: string;
+  topAlign?: boolean;
 }
 
 function cardColor(card: number): string {
@@ -17,7 +18,7 @@ function cardColor(card: number): string {
   return '#6b7280';
 }
 
-export function CardView({ card, faceDown, onClick, highlighted, small, label }: CardViewProps) {
+export function CardView({ card, faceDown, onClick, highlighted, small, label, topAlign }: CardViewProps) {
   const isEmpty = card < 0;
   const w = small ? 48 : 64;
   const h = small ? 72 : 96;
@@ -65,10 +66,13 @@ export function CardView({ card, faceDown, onClick, highlighted, small, label }:
         backgroundColor: highlighted ? '#fef9c3' : '#fff',
         border: `3px solid ${highlighted ? '#f59e0b' : color}`,
         borderRadius: 8,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        display: 'flex',
+        alignItems: topAlign ? 'flex-start' : 'center',
+        justifyContent: 'center',
+        paddingTop: topAlign ? 4 : 0,
         cursor: onClick ? 'pointer' : 'default',
         fontWeight: 700,
-        fontSize,
+        fontSize: topAlign ? '13px' : fontSize,
         color,
         boxShadow: highlighted ? '0 0 8px rgba(245, 158, 11, 0.5)' : '0 1px 3px rgba(0,0,0,0.12)',
         transition: 'all 0.15s',

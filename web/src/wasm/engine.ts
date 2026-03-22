@@ -21,11 +21,13 @@ export interface GameController {
   getBuildingPileSize(pile: number): number;
   getDiscardTop(player: number, pile: number): number;
   getDiscardSize(player: number, pile: number): number;
+  getDiscardPile(player: number, pile: number): VectorInt;
+  getSkipBoPlayed(player: number): number;
   getLegalMoves(): VectorInt;
   applyMove(source: number, target: number): boolean;
-  playAITurn(iterations: number, determinizations: number): VectorInt;
+  playAITurn(iterations: number, determinizations: number, heuristicPct: number): VectorInt;
   passTurn(): void;
-  analyzeMoves(iterations: number, determinizations: number): VectorInt;
+  analyzeMoves(iterations: number, determinizations: number, heuristicPct: number): VectorInt;
   delete(): void;
 }
 

@@ -1,26 +1,40 @@
 import { useState, useMemo } from 'react';
 import { CardView } from './CardView';
 import { PileView } from './PileView';
-import { type GameEngine } from '../hooks/useGameEngine';
-import { MoveSource, MoveTarget } from '../wasm/types';
+import { DiscardPileView } from './DiscardPileView';
+import { type GameEngine, DIFFICULTY_PRESETS } from '../hooks/useGameEngine';
+import { MoveSource, MoveTarget, cardToString, type GameSnapshot } from '../wasm/types';
 
 interface GameBoardProps {
   engine: GameEngine;
 }
 
-function sourceLabel(s: MoveSource): string {
-  if (s <= MoveSource.Hand4) return `Hand ${s}`;
-  if (s === MoveSource.StockPile) return 'Stock';
-  return `Discard ${s - MoveSource.DiscardPile0}`;
+function sourceCard(s: MoveSource, snap: GameSnapshot): string {
+  if (s <= MoveSource.Hand4) return cardToString(snap.hand[s]);
+  if (s === MoveSource.StockPile) return cardToString(snap.stockTop[0]);
+  const di = s - MoveSource.DiscardPile0;
+  return cardToString(snap.discardPiles[0][di]);
 }
 
-function targetLabel(t: MoveTarget): string {
-  if (t <= MoveTarget.BuildingPile3) return `Build ${t}`;
-  return `Discard ${t - MoveTarget.DiscardPile0}`;
+function sourceLabel(s: MoveSource, snap: GameSnapshot): string {
+  const card = sourceCard(s, snap);
+  if (s <= MoveSource.Hand4) return card;
+  if (s === MoveSource.StockPile) return `Stock ${card}`;
+  return `D${s - MoveSource.DiscardPile0 + 1} ${card}`;
+}
+
+function targetLabel(t: MoveTarget, snap: GameSnapshot): string {
+  if (t <= MoveTarget.BuildingPile3) {
+    const top = snap.buildingPiles[t];
+    return `Build ${t + 1}` + (top >= 0 ? ` (${cardToString(top)})` : '');
+  }
+  const di = t - MoveTarget.DiscardPile0;
+  const top = snap.discardPiles[0][di];
+  return `D${di + 1}` + (top >= 0 ? ` (${cardToString(top)})` : '');
 }
 
 export function GameBoard({ engine }: GameBoardProps) {
-  const { snapshot, isAIThinking, playMove, newGame, aiDifficulty, setAiDifficulty,
+  const { snapshot, isAIThinking, isAnalyzing, playMove, newGame, mctsConfig, setMctsConfig,
     analysis, showAnalysis, toggleAnalysis, isLoading } = engine;
   const [selectedSource, setSelectedSource] = useState<MoveSource | null>(null);
 
@@ -67,11 +81,8 @@ export function GameBoard({ engine }: GameBoardProps) {
     setSelectedSource(null);
   };
 
-  return (
-    <div style={{
-      maxWidth: 700, margin: '0 auto', padding: '16px',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    }}>
+  const board = (
+    <div style={{ flex: '0 0 auto', maxWidth: 700 }}>
       {/* Header */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -79,15 +90,24 @@ export function GameBoard({ engine }: GameBoardProps) {
       }}>
         <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Skip-Bo</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <select
-            value={aiDifficulty}
-            onChange={e => setAiDifficulty(Number(e.target.value))}
-            style={{ padding: '4px 8px', borderRadius: 4, border: '1px solid #d1d5db' }}
-          >
-            <option value={0}>Easy AI</option>
-            <option value={1}>Medium AI</option>
-            <option value={2}>Hard AI</option>
-          </select>
+          {DIFFICULTY_PRESETS.map((p) => {
+            const active = mctsConfig.iterations === p.config.iterations
+              && mctsConfig.determinizations === p.config.determinizations;
+            return (
+              <button
+                key={p.label}
+                onClick={() => setMctsConfig(p.config)}
+                style={{
+                  padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
+                  border: '1px solid #d1d5db',
+                  backgroundColor: active ? '#dbeafe' : '#fff',
+                  fontWeight: active ? 600 : 400, fontSize: '13px',
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
           <button
             onClick={toggleAnalysis}
             style={{
@@ -138,10 +158,9 @@ export function GameBoard({ engine }: GameBoardProps) {
         />
         <div style={{ width: 16 }} />
         {[0, 1, 2, 3].map(d => (
-          <PileView
+          <DiscardPileView
             key={`opp-d-${d}`}
-            topCard={snapshot.discardPiles[1][d]}
-            size={snapshot.discardPileSizes[1][d]}
+            cards={snapshot.discardPileCards[1][d]}
             label={`D${d + 1}`}
           />
         ))}
@@ -193,10 +212,9 @@ export function GameBoard({ engine }: GameBoardProps) {
             const isSource = validSources.has(sourceEnum);
             const isTarget = validTargets.has(targetEnum);
             return (
-              <PileView
+              <DiscardPileView
                 key={`my-d-${d}`}
-                topCard={snapshot.discardPiles[0][d]}
-                size={snapshot.discardPileSizes[0][d]}
+                cards={snapshot.discardPileCards[0][d]}
                 label={`D${d + 1}`}
                 highlighted={selectedSource === sourceEnum || isTarget}
                 onClick={
@@ -226,52 +244,150 @@ export function GameBoard({ engine }: GameBoardProps) {
           })}
         </div>
       </div>
+    </div>
+  );
 
-      {/* Analysis panel */}
-      {showAnalysis && analysis && analysis.length > 0 && (
-        <div style={{
-          marginTop: 16, padding: '12px', backgroundColor: '#faf5ff',
-          borderRadius: 8, border: '1px solid #e9d5ff',
-        }}>
-          <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: 8, color: '#7c3aed' }}>
-            Move Analysis (win %)
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {[...analysis]
-              .sort((a, b) => b.winProbability - a.winProbability)
-              .slice(0, 10)
-              .map((a, i) => {
-                const best = getBestWinProb();
-                const isBest = Math.abs(a.winProbability - best) < 0.001;
-                const pct = (a.winProbability * 100).toFixed(1);
-                return (
-                  <div key={i} style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    fontSize: '12px', fontWeight: isBest ? 700 : 400,
-                    color: isBest ? '#7c3aed' : '#4b5563',
+  const analysisPanel = showAnalysis ? (
+    <div style={{
+      width: 280, flexShrink: 0, padding: '12px',
+      backgroundColor: '#faf5ff', borderRadius: 8, border: '1px solid #e9d5ff',
+      alignSelf: 'flex-start',
+    }}>
+      {/* Skip-Bo tally */}
+      <div style={{
+        fontSize: '13px', fontWeight: 600, marginBottom: 8, color: '#7c3aed',
+      }}>
+        Skip-Bo Cards Played
+      </div>
+      <div style={{
+        display: 'flex', gap: 16, marginBottom: 16, paddingBottom: 12,
+        borderBottom: '1px solid #e9d5ff', fontSize: '13px',
+      }}>
+        <div>
+          <span style={{ color: '#6b7280' }}>You: </span>
+          <span style={{ fontWeight: 700, color: '#d4a017' }}>{snapshot.skipBoPlayed[0]}</span>
+        </div>
+        <div>
+          <span style={{ color: '#6b7280' }}>AI: </span>
+          <span style={{ fontWeight: 700, color: '#d4a017' }}>{snapshot.skipBoPlayed[1]}</span>
+        </div>
+        <div style={{ color: '#9ca3af', fontSize: '11px', marginLeft: 'auto' }}>
+          / 18 total
+        </div>
+      </div>
+
+      {/* Move analysis */}
+      <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: 8, color: '#7c3aed' }}>
+        Move Analysis (win %)
+      </div>
+      {analysis && analysis.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {[...analysis]
+            .sort((a, b) => b.winProbability - a.winProbability)
+            .slice(0, 10)
+            .map((a, i) => {
+              const best = getBestWinProb();
+              const isBest = Math.abs(a.winProbability - best) < 0.001;
+              const pct = (a.winProbability * 100).toFixed(1);
+              return (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  fontSize: '12px', fontWeight: isBest ? 700 : 400,
+                  color: isBest ? '#7c3aed' : '#4b5563',
+                }}>
+                  <span style={{ width: 120, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {sourceLabel(a.source, snapshot)} → {targetLabel(a.target, snapshot)}
+                  </span>
+                  <div style={{
+                    flex: 1, height: 12, backgroundColor: '#e5e7eb', borderRadius: 4,
+                    overflow: 'hidden',
                   }}>
-                    <span style={{ width: 150, whiteSpace: 'nowrap' }}>
-                      {sourceLabel(a.source)} → {targetLabel(a.target)}
-                    </span>
                     <div style={{
-                      flex: 1, height: 14, backgroundColor: '#e5e7eb', borderRadius: 4,
-                      overflow: 'hidden',
-                    }}>
-                      <div style={{
-                        width: `${a.winProbability * 100}%`,
-                        height: '100%',
-                        backgroundColor: a.winProbability > 0.5 ? '#22c55e' : a.winProbability > 0.3 ? '#eab308' : '#ef4444',
-                        borderRadius: 4,
-                        transition: 'width 0.3s',
-                      }} />
-                    </div>
-                    <span style={{ width: 48, textAlign: 'right' }}>{pct}%</span>
+                      width: `${a.winProbability * 100}%`,
+                      height: '100%',
+                      backgroundColor: a.winProbability > 0.5 ? '#22c55e' : a.winProbability > 0.3 ? '#eab308' : '#ef4444',
+                      borderRadius: 4,
+                      transition: 'width 0.3s',
+                    }} />
                   </div>
-                );
-              })}
-          </div>
+                  <span style={{ width: 40, textAlign: 'right', fontSize: '11px' }}>{pct}%</span>
+                </div>
+              );
+            })}
+        </div>
+      ) : (
+        <div style={{ fontSize: '12px', color: '#9ca3af' }}>
+          {isAnalyzing ? 'Analyzing...' : isMyTurn ? 'Waiting for data' : 'Play a move to see analysis'}
         </div>
       )}
+
+      {/* MCTS config */}
+      <div style={{
+        marginTop: 16, paddingTop: 12, borderTop: '1px solid #e9d5ff',
+      }}>
+        <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: 8, color: '#7c3aed' }}>
+          MCTS Config
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '12px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 80, color: '#6b7280' }}>Iterations</span>
+            <input
+              type="number"
+              min={10}
+              max={50000}
+              step={100}
+              value={mctsConfig.iterations}
+              onChange={e => setMctsConfig({ ...mctsConfig, iterations: Number(e.target.value) })}
+              style={{
+                width: 80, padding: '2px 6px', borderRadius: 4,
+                border: '1px solid #d1d5db', fontSize: '12px',
+              }}
+            />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 80, color: '#6b7280' }}>Dets</span>
+            <input
+              type="number"
+              min={1}
+              max={100}
+              value={mctsConfig.determinizations}
+              onChange={e => setMctsConfig({ ...mctsConfig, determinizations: Number(e.target.value) })}
+              style={{
+                width: 80, padding: '2px 6px', borderRadius: 4,
+                border: '1px solid #d1d5db', fontSize: '12px',
+              }}
+            />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 80, color: '#6b7280' }}>Heuristic %</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={10}
+              value={mctsConfig.heuristicPct}
+              onChange={e => setMctsConfig({ ...mctsConfig, heuristicPct: Number(e.target.value) })}
+              style={{
+                width: 80, padding: '2px 6px', borderRadius: 4,
+                border: '1px solid #d1d5db', fontSize: '12px',
+              }}
+            />
+          </label>
+          <div style={{ color: '#9ca3af', fontSize: '11px' }}>
+            {(mctsConfig.iterations * mctsConfig.determinizations).toLocaleString()} total sims
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
+  return (
+    <div style={{
+      display: 'flex', gap: 24, justifyContent: 'center', padding: '16px',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    }}>
+      {board}
+      {analysisPanel}
     </div>
   );
 }

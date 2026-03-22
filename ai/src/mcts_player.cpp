@@ -11,26 +11,58 @@ namespace skipbo {
 MCTSPlayer::MCTSPlayer(uint64_t seed, MCTSConfig config)
     : rng_(seed), config_(config) {}
 
-static double rollout(GameState state, int perspective, std::mt19937& rng) {
+// Heuristic rollout policy: prioritize stock→build, then any build play,
+// then discard. This lets rollouts discover tactical chains that random
+// play would almost never find.
+static const Move& pick_rollout_move(const std::vector<Move>& moves,
+                                      std::mt19937& rng) {
+    // Tier 1: stock → building pile (directly reduces stock = winning)
+    // Tier 2: any source → building pile (keeps turn going, progresses game)
+    // Tier 3: discard (ends turn)
+    // Within each tier, pick randomly.
+
+    thread_local std::vector<size_t> tier1, tier2, tier3;
+    tier1.clear(); tier2.clear(); tier3.clear();
+
+    for (size_t i = 0; i < moves.size(); ++i) {
+        if (moves[i].is_discard()) {
+            tier3.push_back(i);
+        } else if (moves[i].is_from_stock()) {
+            tier1.push_back(i);
+        } else {
+            tier2.push_back(i);
+        }
+    }
+
+    const auto& tier = !tier1.empty() ? tier1 : !tier2.empty() ? tier2 : tier3;
+    std::uniform_int_distribution<size_t> dist(0, tier.size() - 1);
+    return moves[tier[dist(rng)]];
+}
+
+static double rollout(GameState state, int perspective, double heuristic_rate,
+                      std::mt19937& rng) {
     std::vector<Move> moves;
-    int max_moves = 500; // safety limit
+    std::uniform_real_distribution<double> coin(0.0, 1.0);
+    int max_moves = 500;
     int consecutive_passes = 0;
     while (!state.game_over && max_moves-- > 0 && consecutive_passes < 4) {
         moves.clear();
         get_legal_moves(state, moves);
         if (moves.empty()) {
-            // No legal moves — pass turn
             state.current_player = 1 - state.current_player;
             consecutive_passes++;
             continue;
         }
         consecutive_passes = 0;
-        std::uniform_int_distribution<size_t> dist(0, moves.size() - 1);
-        Game::apply_move_to_state(state, moves[dist(rng)]);
+        if (coin(rng) < heuristic_rate) {
+            Game::apply_move_to_state(state, pick_rollout_move(moves, rng));
+        } else {
+            std::uniform_int_distribution<size_t> dist(0, moves.size() - 1);
+            Game::apply_move_to_state(state, moves[dist(rng)]);
+        }
     }
     if (state.winner == perspective) return 1.0;
     if (state.winner == 1 - perspective) return 0.0;
-    // Stalemate — evaluate by who has fewer stock pile cards
     int my_stock = state.players[perspective].stock_size();
     int opp_stock = state.players[1 - perspective].stock_size();
     if (my_stock < opp_stock) return 0.75;
@@ -83,7 +115,7 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
             }
 
             // ROLLOUT
-            double reward = rollout(sim_state, my_id, rng_);
+            double reward = rollout(sim_state, my_id, config_.rollout_heuristic_rate, rng_);
 
             // BACKPROPAGATE
             while (node != nullptr) {

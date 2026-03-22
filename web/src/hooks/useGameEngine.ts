@@ -17,6 +17,8 @@ function takeSnapshot(ctrl: GameController): GameSnapshot {
     buildingPileSizes: [0, 1, 2, 3].map(i => ctrl.getBuildingPileSize(i)),
     discardPiles: [0, 1].map(p => [0, 1, 2, 3].map(d => ctrl.getDiscardTop(p, d))),
     discardPileSizes: [0, 1].map(p => [0, 1, 2, 3].map(d => ctrl.getDiscardSize(p, d))),
+    discardPileCards: [0, 1].map(p => [0, 1, 2, 3].map(d => vectorToArray(ctrl.getDiscardPile(p, d)))),
+    skipBoPlayed: [ctrl.getSkipBoPlayed(0), ctrl.getSkipBoPlayed(1)],
     currentPlayer: ctrl.getCurrentPlayer(),
     isGameOver: ctrl.isGameOver(),
     winner: ctrl.getWinner(),
@@ -24,16 +26,29 @@ function takeSnapshot(ctrl: GameController): GameSnapshot {
   };
 }
 
+export interface MCTSConfig {
+  iterations: number;
+  determinizations: number;
+  heuristicPct: number; // 0-100, rollout heuristic rate
+}
+
+export const DIFFICULTY_PRESETS: { label: string; config: MCTSConfig }[] = [
+  { label: 'Easy',   config: { iterations: 50,    determinizations: 3,  heuristicPct: 50 } },
+  { label: 'Medium', config: { iterations: 300,   determinizations: 10, heuristicPct: 50 } },
+  { label: 'Hard',   config: { iterations: 10000, determinizations: 20, heuristicPct: 50 } },
+];
+
 export interface GameEngine {
   snapshot: GameSnapshot | null;
   isLoading: boolean;
   isAIThinking: boolean;
-  aiDifficulty: number;
+  isAnalyzing: boolean;
+  mctsConfig: MCTSConfig;
   analysis: MoveWithAnalysis[] | null;
   showAnalysis: boolean;
   playMove: (source: MoveSource, target: MoveTarget) => void;
   newGame: () => void;
-  setAiDifficulty: (d: number) => void;
+  setMctsConfig: (config: MCTSConfig) => void;
   toggleAnalysis: () => void;
 }
 
@@ -42,22 +57,37 @@ export function useGameEngine(): GameEngine {
   const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isAIThinking, setIsAIThinking] = useState(false);
-  const [aiDifficulty, setAiDifficulty] = useState(1); // 0=easy, 1=medium, 2=hard
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [mctsConfig, setMctsConfig] = useState<MCTSConfig>(DIFFICULTY_PRESETS[1].config);
   const [analysis, setAnalysis] = useState<MoveWithAnalysis[] | null>(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const showAnalysisRef = useRef(showAnalysis);
+  showAnalysisRef.current = showAnalysis;
+  const mctsConfigRef = useRef(mctsConfig);
+  mctsConfigRef.current = mctsConfig;
 
-  const difficultyConfigs = [
-    { iterations: 50, determinizations: 3 },    // easy
-    { iterations: 100, determinizations: 5 },   // medium
-    { iterations: 300, determinizations: 10 },   // hard
-  ];
+  const runAnalysis = useCallback(() => {
+    const ctrl = ctrlRef.current;
+    if (!ctrl || ctrl.isGameOver() || ctrl.getCurrentPlayer() !== 0) return;
 
-  const refreshSnapshot = useCallback(() => {
+    setIsAnalyzing(true);
+    setTimeout(() => {
+      const cfg = mctsConfigRef.current;
+      const flat = vectorToArray(ctrl.analyzeMoves(cfg.iterations, cfg.determinizations, cfg.heuristicPct));
+      setAnalysis(parseAnalysis(flat));
+      setIsAnalyzing(false);
+    }, 30);
+  }, []);
+
+  const refreshSnapshot = useCallback((andAnalyze: boolean = false) => {
     if (ctrlRef.current) {
       setSnapshot(takeSnapshot(ctrlRef.current));
       setAnalysis(null);
+      if (andAnalyze || showAnalysisRef.current) {
+        runAnalysis();
+      }
     }
-  }, []);
+  }, [runAnalysis]);
 
   const startGame = useCallback(async () => {
     setIsLoading(true);
@@ -90,15 +120,13 @@ export function useGameEngine(): GameEngine {
 
     setIsAIThinking(true);
 
-    // Use setTimeout to let UI update before blocking on AI computation
     setTimeout(() => {
-      const config = difficultyConfigs[aiDifficulty];
-      vectorToArray(ctrl.playAITurn(config.iterations, config.determinizations));
+      const cfg = mctsConfigRef.current;
+      vectorToArray(ctrl.playAITurn(cfg.iterations, cfg.determinizations, cfg.heuristicPct));
       setIsAIThinking(false);
       refreshSnapshot();
     }, 50);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiDifficulty, refreshSnapshot]);
+  }, [refreshSnapshot]);
 
   const playMove = useCallback((source: MoveSource, target: MoveTarget) => {
     const ctrl = ctrlRef.current;
@@ -109,27 +137,19 @@ export function useGameEngine(): GameEngine {
 
     refreshSnapshot();
 
-    // If this was a discard (ends turn) or game is over, check if AI should play
     if (isDiscard(target) && !ctrl.isGameOver()) {
       runAITurn();
     }
   }, [refreshSnapshot, runAITurn]);
 
-  const runAnalysis = useCallback(() => {
-    const ctrl = ctrlRef.current;
-    if (!ctrl || ctrl.isGameOver() || ctrl.getCurrentPlayer() !== 0) return;
-
-    const config = difficultyConfigs[aiDifficulty];
-    const flat = vectorToArray(ctrl.analyzeMoves(config.iterations, config.determinizations));
-    setAnalysis(parseAnalysis(flat));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiDifficulty]);
-
   const toggleAnalysis = useCallback(() => {
     setShowAnalysis(prev => {
       const next = !prev;
-      if (next) runAnalysis();
-      else setAnalysis(null);
+      if (next) {
+        runAnalysis();
+      } else {
+        setAnalysis(null);
+      }
       return next;
     });
   }, [runAnalysis]);
@@ -138,12 +158,13 @@ export function useGameEngine(): GameEngine {
     snapshot,
     isLoading,
     isAIThinking,
-    aiDifficulty,
+    isAnalyzing,
+    mctsConfig,
     analysis,
     showAnalysis,
     playMove,
     newGame: startGame,
-    setAiDifficulty,
+    setMctsConfig,
     toggleAnalysis,
   };
 }

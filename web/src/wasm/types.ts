@@ -34,6 +34,8 @@ export interface GameSnapshot {
   buildingPileSizes: number[];
   discardPiles: number[][];       // [player][pile] = top card
   discardPileSizes: number[][];
+  discardPileCards: number[][][];  // [player][pile] = array of cards bottom-to-top
+  skipBoPlayed: [number, number];  // [player0, player1] total SB cards played
   currentPlayer: number;
   isGameOver: boolean;
   winner: number;

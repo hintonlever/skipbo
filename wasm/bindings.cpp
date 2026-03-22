@@ -20,6 +20,8 @@ EMSCRIPTEN_BINDINGS(skipbo) {
         .function("getBuildingPileSize", &WasmGameController::getBuildingPileSize)
         .function("getDiscardTop", &WasmGameController::getDiscardTop)
         .function("getDiscardSize", &WasmGameController::getDiscardSize)
+        .function("getDiscardPile", &WasmGameController::getDiscardPile)
+        .function("getSkipBoPlayed", &WasmGameController::getSkipBoPlayed)
         // Legal moves
         .function("getLegalMoves", &WasmGameController::getLegalMoves)
         // Actions

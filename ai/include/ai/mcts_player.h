@@ -15,6 +15,7 @@ struct MCTSConfig {
     int num_determinizations = 20;
     int iterations_per_det = 500;
     double exploration = 1.414;
+    double rollout_heuristic_rate = 0.5; // 0.0 = pure random, 1.0 = pure heuristic
 };
 
 class MCTSPlayer : public Player {
@@ -23,7 +24,10 @@ public:
 
     Move choose_move(const GameState& observable_state,
                      const std::vector<Move>& legal_moves) override;
-    std::string name() const override { return "MCTS"; }
+    std::string name() const override {
+        int pct = static_cast<int>(config_.rollout_heuristic_rate * 100);
+        return "MCTS-" + std::to_string(pct);
+    }
 
     std::vector<MoveAnalysis> analyze_moves(const GameState& observable_state,
                                             const std::vector<Move>& legal_moves);

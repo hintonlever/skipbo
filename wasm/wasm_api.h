@@ -66,6 +66,15 @@ public:
         return static_cast<int>(game_.state().players[player].discard_piles[pile].size());
     }
 
+    // All cards in a discard pile (bottom to top)
+    std::vector<int> getDiscardPile(int player, int pile) const {
+        const auto& dp = game_.state().players[player].discard_piles[pile];
+        std::vector<int> cards;
+        cards.reserve(dp.size());
+        for (Card c : dp) cards.push_back(static_cast<int>(c));
+        return cards;
+    }
+
     // --- Legal moves ---
 
     // Returns legal moves as flat array: [source0, target0, source1, target1, ...]
@@ -85,15 +94,30 @@ public:
     // Apply a move (source, target as ints). Returns true if successful.
     bool applyMove(int source, int target) {
         Move m{static_cast<MoveSource>(source), static_cast<MoveTarget>(target)};
+        // Track Skip-Bo card usage before applying (card may be removed)
+        if (!m.is_discard()) {
+            Card card = CARD_NONE;
+            const auto& player = game_.state().players[game_.current_player()];
+            if (m.is_from_hand()) {
+                int hi = m.hand_index();
+                if (hi < player.hand_count) card = player.hand[hi];
+            } else if (m.is_from_stock()) {
+                card = player.stock_top();
+            } else if (m.is_from_discard()) {
+                card = player.discard_top(m.source_discard_index());
+            }
+            if (is_skipbo(card)) skipbo_played_[game_.current_player()]++;
+        }
         return game_.apply_move(m);
     }
 
     // Let the AI play its turn (player 1). Returns when AI's turn is done.
     // Returns a flat array of moves the AI made: [source0, target0, source1, target1, ...]
-    std::vector<int> playAITurn(int iterations, int determinizations) {
+    std::vector<int> playAITurn(int iterations, int determinizations, int heuristicPct) {
         MCTSConfig config;
         config.iterations_per_det = iterations;
         config.num_determinizations = determinizations;
+        config.rollout_heuristic_rate = heuristicPct / 100.0;
         ai_.set_config(config);
 
         std::vector<int> moves_made;
@@ -108,6 +132,20 @@ public:
             Move chosen = ai_.choose_move(game_.state(), legal);
             moves_made.push_back(static_cast<int>(chosen.source));
             moves_made.push_back(static_cast<int>(chosen.target));
+            // Track Skip-Bo usage for AI
+            if (!chosen.is_discard()) {
+                Card card = CARD_NONE;
+                const auto& player = game_.state().players[1];
+                if (chosen.is_from_hand()) {
+                    int hi = chosen.hand_index();
+                    if (hi < player.hand_count) card = player.hand[hi];
+                } else if (chosen.is_from_stock()) {
+                    card = player.stock_top();
+                } else if (chosen.is_from_discard()) {
+                    card = player.discard_top(chosen.source_discard_index());
+                }
+                if (is_skipbo(card)) skipbo_played_[1]++;
+            }
             game_.apply_move(chosen);
         }
 
@@ -119,14 +157,19 @@ public:
         game_.pass_turn();
     }
 
+    // --- Stats ---
+
+    int getSkipBoPlayed(int player) const { return skipbo_played_[player]; }
+
     // --- Analysis ---
 
     // Analyze moves for the current player. Returns flat array:
     // [source0, target0, winProb0*1000, source1, target1, winProb1*1000, ...]
-    std::vector<int> analyzeMoves(int iterations, int determinizations) {
+    std::vector<int> analyzeMoves(int iterations, int determinizations, int heuristicPct) {
         MCTSConfig config;
         config.iterations_per_det = iterations;
         config.num_determinizations = determinizations;
+        config.rollout_heuristic_rate = heuristicPct / 100.0;
         ai_.set_config(config);
 
         auto legal = get_legal_moves(game_.state());
@@ -146,6 +189,7 @@ private:
     Game game_;
     MCTSPlayer ai_;
     std::mt19937 rng_;
+    std::array<int, NUM_PLAYERS> skipbo_played_ = {0, 0};
 };
 
 } // namespace skipbo
