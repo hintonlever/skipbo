@@ -113,10 +113,8 @@ static Move pick_random_move(const GameState& state, std::mt19937& rng) {
 }
 
 static double rollout(GameState state, int perspective, double heuristic_rate,
-                      int rollout_depth, std::mt19937& rng) {
-    int my_stock_start = state.players[perspective].stock_size();
-    int opp_stock_start = state.players[1 - perspective].stock_size();
-
+                      int rollout_depth, int root_my_stock, int root_opp_stock,
+                      std::mt19937& rng) {
     std::uniform_real_distribution<double> coin(0.0, 1.0);
     int max_moves = rollout_depth * 2; // per-player depth * 2 players
     int consecutive_passes = 0;
@@ -149,9 +147,10 @@ static double rollout(GameState state, int perspective, double heuristic_rate,
     if (state.winner == perspective) return 1.0;
     if (state.winner == 1 - perspective) return 0.0;
 
-    // Score by stock card progress delta
-    int my_progress = my_stock_start - state.players[perspective].stock_size();
-    int opp_progress = opp_stock_start - state.players[1 - perspective].stock_size();
+    // Score by stock card progress from root state (not rollout start)
+    // This ensures moves played during SELECT+EXPAND get credit
+    int my_progress = root_my_stock - state.players[perspective].stock_size();
+    int opp_progress = root_opp_stock - state.players[1 - perspective].stock_size();
     int delta = my_progress - opp_progress;
 
     // Normalize to [0, 1], clamped
@@ -177,6 +176,8 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
 
         MCTSNode root(legal_moves);
         int my_id = observable_state.current_player;
+        int root_my_stock = observable_state.players[my_id].stock_size();
+        int root_opp_stock = observable_state.players[1 - my_id].stock_size();
 
         for (int iter = 0; iter < config_.iterations_per_det; ++iter) {
             GameState sim_state = det_state;
@@ -202,7 +203,7 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
 
             // ROLLOUT
             double reward = rollout(sim_state, my_id, config_.rollout_heuristic_rate,
-                                    config_.rollout_depth, rng_);
+                                    config_.rollout_depth, root_my_stock, root_opp_stock, rng_);
 
             // BACKPROPAGATE
             while (node != nullptr) {
@@ -212,14 +213,12 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
             }
         }
 
-        // Aggregate scores from this determinization
-        int total_root_visits = root.visits;
+        // Aggregate average reward from this determinization
         for (const auto& child : root.children) {
-            // Find which legal_move index this corresponds to
             for (size_t i = 0; i < legal_moves.size(); ++i) {
                 if (legal_moves[i] == child->move) {
-                    if (total_root_visits > 0) {
-                        move_scores[i] += static_cast<double>(child->visits) / total_root_visits;
+                    if (child->visits > 0) {
+                        move_scores[i] += child->total_reward / child->visits;
                     }
                     move_total_visits[i] += child->visits;
                     break;
@@ -228,11 +227,17 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
         }
     }
 
-    // Build results
+    // Build results — average reward across determinizations
     std::vector<MoveAnalysis> results;
     results.reserve(legal_moves.size());
     for (size_t i = 0; i < legal_moves.size(); ++i) {
-        double score = move_scores.count(i) ? move_scores[i] / config_.num_determinizations : 0.0;
+        int dets_with_visits = 0;
+        // Count how many determinizations actually visited this move
+        // (move_scores[i] is sum of per-det average rewards)
+        double score = 0.0;
+        if (move_total_visits.count(i) && move_total_visits[i] > 0) {
+            score = move_scores.count(i) ? move_scores[i] / config_.num_determinizations : 0.0;
+        }
         int visits = move_total_visits.count(i) ? move_total_visits[i] : 0;
         results.push_back({legal_moves[i], score, visits});
     }

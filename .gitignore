@@ -1,4 +1,5 @@
 build/
+build-wasm/
 emsdk/
 web/node_modules/
 web/dist/
