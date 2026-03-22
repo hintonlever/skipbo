@@ -25,9 +25,9 @@ export interface GameController {
   getSkipBoPlayed(player: number): number;
   getLegalMoves(): VectorInt;
   applyMove(source: number, target: number): boolean;
-  playAITurn(iterations: number, determinizations: number, heuristicPct: number): VectorInt;
+  playAITurn(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number): VectorInt;
   passTurn(): void;
-  analyzeMoves(iterations: number, determinizations: number, heuristicPct: number): VectorInt;
+  analyzeMoves(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number): VectorInt;
   delete(): void;
 }
 

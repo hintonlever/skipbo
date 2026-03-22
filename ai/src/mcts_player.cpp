@@ -113,11 +113,15 @@ static Move pick_random_move(const GameState& state, std::mt19937& rng) {
 }
 
 static double rollout(GameState state, int perspective, double heuristic_rate,
-                      std::mt19937& rng) {
+                      int rollout_depth, std::mt19937& rng) {
+    int my_stock_start = state.players[perspective].stock_size();
+    int opp_stock_start = state.players[1 - perspective].stock_size();
+
     std::uniform_real_distribution<double> coin(0.0, 1.0);
-    int max_moves = 500;
+    int max_moves = rollout_depth * 2; // per-player depth * 2 players
     int consecutive_passes = 0;
-    while (!state.game_over && max_moves-- > 0 && consecutive_passes < 4) {
+    int moves_made = 0;
+    while (!state.game_over && moves_made < max_moves && consecutive_passes < 4) {
         const auto& player = state.players[state.current_player];
         // Quick check: any hand cards or playable stock/discard?
         if (player.hand_count == 0 && player.stock_empty()) {
@@ -138,14 +142,23 @@ static double rollout(GameState state, int perspective, double heuristic_rate,
             ? pick_heuristic_move(state, rng)
             : pick_random_move(state, rng);
         Game::apply_move_to_state(state, m);
+        moves_made++;
     }
+
+    // Terminal win/loss
     if (state.winner == perspective) return 1.0;
     if (state.winner == 1 - perspective) return 0.0;
-    int my_stock = state.players[perspective].stock_size();
-    int opp_stock = state.players[1 - perspective].stock_size();
-    if (my_stock < opp_stock) return 0.75;
-    if (my_stock > opp_stock) return 0.25;
-    return 0.5;
+
+    // Score by stock card progress delta
+    int my_progress = my_stock_start - state.players[perspective].stock_size();
+    int opp_progress = opp_stock_start - state.players[1 - perspective].stock_size();
+    int delta = my_progress - opp_progress;
+
+    // Normalize to [0, 1], clamped
+    double reward = 0.5 + static_cast<double>(delta) / (2.0 * rollout_depth);
+    if (reward < 0.0) reward = 0.0;
+    if (reward > 1.0) reward = 1.0;
+    return reward;
 }
 
 std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
@@ -188,7 +201,8 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
             }
 
             // ROLLOUT
-            double reward = rollout(sim_state, my_id, config_.rollout_heuristic_rate, rng_);
+            double reward = rollout(sim_state, my_id, config_.rollout_heuristic_rate,
+                                    config_.rollout_depth, rng_);
 
             // BACKPROPAGATE
             while (node != nullptr) {

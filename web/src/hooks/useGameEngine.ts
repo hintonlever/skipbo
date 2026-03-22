@@ -30,12 +30,13 @@ export interface MCTSConfig {
   iterations: number;
   determinizations: number;
   heuristicPct: number; // 0-100, rollout heuristic rate
+  rolloutDepth: number; // moves per player in rollout
 }
 
 export const DIFFICULTY_PRESETS: { label: string; config: MCTSConfig }[] = [
-  { label: 'Easy',   config: { iterations: 50,    determinizations: 3,  heuristicPct: 50 } },
-  { label: 'Medium', config: { iterations: 300,   determinizations: 10, heuristicPct: 50 } },
-  { label: 'Hard',   config: { iterations: 10000, determinizations: 20, heuristicPct: 50 } },
+  { label: 'Easy',   config: { iterations: 50,    determinizations: 3,  heuristicPct: 50, rolloutDepth: 5 } },
+  { label: 'Medium', config: { iterations: 300,   determinizations: 10, heuristicPct: 50, rolloutDepth: 5 } },
+  { label: 'Hard',   config: { iterations: 10000, determinizations: 20, heuristicPct: 50, rolloutDepth: 10 } },
 ];
 
 export interface GameEngine {
@@ -73,7 +74,7 @@ export function useGameEngine(): GameEngine {
     setIsAnalyzing(true);
     setTimeout(() => {
       const cfg = mctsConfigRef.current;
-      const flat = vectorToArray(ctrl.analyzeMoves(cfg.iterations, cfg.determinizations, cfg.heuristicPct));
+      const flat = vectorToArray(ctrl.analyzeMoves(cfg.iterations, cfg.determinizations, cfg.heuristicPct, cfg.rolloutDepth));
       setAnalysis(parseAnalysis(flat));
       setIsAnalyzing(false);
     }, 30);
@@ -122,7 +123,7 @@ export function useGameEngine(): GameEngine {
 
     setTimeout(() => {
       const cfg = mctsConfigRef.current;
-      vectorToArray(ctrl.playAITurn(cfg.iterations, cfg.determinizations, cfg.heuristicPct));
+      vectorToArray(ctrl.playAITurn(cfg.iterations, cfg.determinizations, cfg.heuristicPct, cfg.rolloutDepth));
       setIsAIThinking(false);
       refreshSnapshot();
     }, 50);

@@ -373,6 +373,20 @@ export function GameBoard({ engine }: GameBoardProps) {
               }}
             />
           </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 80, color: '#6b7280' }}>Depth</span>
+            <input
+              type="number"
+              min={1}
+              max={50}
+              value={mctsConfig.rolloutDepth}
+              onChange={e => setMctsConfig({ ...mctsConfig, rolloutDepth: Number(e.target.value) })}
+              style={{
+                width: 80, padding: '2px 6px', borderRadius: 4,
+                border: '1px solid #d1d5db', fontSize: '12px',
+              }}
+            />
+          </label>
           <div style={{ color: '#9ca3af', fontSize: '11px' }}>
             {(mctsConfig.iterations * mctsConfig.determinizations).toLocaleString()} total sims
           </div>

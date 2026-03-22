@@ -113,11 +113,12 @@ public:
 
     // Let the AI play its turn (player 1). Returns when AI's turn is done.
     // Returns a flat array of moves the AI made: [source0, target0, source1, target1, ...]
-    std::vector<int> playAITurn(int iterations, int determinizations, int heuristicPct) {
+    std::vector<int> playAITurn(int iterations, int determinizations, int heuristicPct, int rolloutDepth = 5) {
         MCTSConfig config;
         config.iterations_per_det = iterations;
         config.num_determinizations = determinizations;
         config.rollout_heuristic_rate = heuristicPct / 100.0;
+        config.rollout_depth = rolloutDepth;
         ai_.set_config(config);
 
         std::vector<int> moves_made;
@@ -165,11 +166,12 @@ public:
 
     // Analyze moves for the current player. Returns flat array:
     // [source0, target0, winProb0*1000, source1, target1, winProb1*1000, ...]
-    std::vector<int> analyzeMoves(int iterations, int determinizations, int heuristicPct) {
+    std::vector<int> analyzeMoves(int iterations, int determinizations, int heuristicPct, int rolloutDepth = 5) {
         MCTSConfig config;
         config.iterations_per_det = iterations;
         config.num_determinizations = determinizations;
         config.rollout_heuristic_rate = heuristicPct / 100.0;
+        config.rollout_depth = rolloutDepth;
         ai_.set_config(config);
 
         auto legal = get_legal_moves(game_.state());
