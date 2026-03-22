@@ -41,7 +41,7 @@ TEST_CASE("GameState building pile needs", "[game_state]") {
     // Empty pile needs 1
     REQUIRE(gs.building_pile_needs(0) == CARD_MIN);
 
-    gs.building_piles[0] = {1, 2, 3};
+    gs.building_pile_count[0] = 3; // contains cards 1,2,3
     REQUIRE(gs.building_pile_needs(0) == 4);
 }
 
@@ -52,7 +52,7 @@ TEST_CASE("GameState can play on building", "[game_state]") {
     REQUIRE(gs.can_play_on_building(CARD_SKIPBO, 0));
     REQUIRE_FALSE(gs.can_play_on_building(2, 0));
 
-    gs.building_piles[0] = {1, 2, 3};
+    gs.building_pile_count[0] = 3; // contains cards 1,2,3
     REQUIRE(gs.can_play_on_building(4, 0));
     REQUIRE(gs.can_play_on_building(CARD_SKIPBO, 0));
     REQUIRE_FALSE(gs.can_play_on_building(3, 0));

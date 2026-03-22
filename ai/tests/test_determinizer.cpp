@@ -45,7 +45,7 @@ TEST_CASE("Determinizer preserves total card count", "[determinizer]") {
             }
         }
         for (int b = 0; b < NUM_BUILDING_PILES; ++b) {
-            total += gs.building_piles[b].size();
+            total += gs.building_pile_count[b];
         }
         total += gs.draw_pile.size();
         return total;
@@ -67,7 +67,9 @@ TEST_CASE("Different seeds produce different determinizations", "[determinizer]"
 
     // Draw piles should differ (very high probability with 72+ hidden cards)
     bool differ = false;
-    for (size_t i = 0; i < s1.draw_pile.size() && i < s2.draw_pile.size(); ++i) {
+    int min_size = s1.draw_pile.size() < s2.draw_pile.size()
+        ? s1.draw_pile.size() : s2.draw_pile.size();
+    for (int i = 0; i < min_size; ++i) {
         if (s1.draw_pile[i] != s2.draw_pile[i]) {
             differ = true;
             break;

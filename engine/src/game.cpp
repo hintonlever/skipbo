@@ -9,20 +9,20 @@ Game::Game(uint64_t seed) : rng_(seed) {}
 
 void Game::setup() {
     // Create and shuffle deck
-    auto full_cards = std::vector<Card>();
-    full_cards.reserve(TOTAL_CARDS);
+    Card full_cards[TOTAL_CARDS];
+    int idx = 0;
     for (Card v = CARD_MIN; v <= CARD_MAX; ++v) {
         for (int i = 0; i < CARDS_PER_VALUE; ++i) {
-            full_cards.push_back(v);
+            full_cards[idx++] = v;
         }
     }
     for (int i = 0; i < NUM_SKIPBO; ++i) {
-        full_cards.push_back(CARD_SKIPBO);
+        full_cards[idx++] = CARD_SKIPBO;
     }
-    std::shuffle(full_cards.begin(), full_cards.end(), rng_);
+    std::shuffle(full_cards, full_cards + TOTAL_CARDS, rng_);
 
     // Deal stock piles (30 cards each)
-    int idx = 0;
+    idx = 0;
     for (int p = 0; p < NUM_PLAYERS; ++p) {
         state_.players[p].stock_pile.resize(STOCK_PILE_SIZE);
         for (int i = 0; i < STOCK_PILE_SIZE; ++i) {
@@ -34,10 +34,13 @@ void Game::setup() {
     }
 
     // Remaining cards go to draw pile
-    state_.draw_pile.assign(full_cards.begin() + idx, full_cards.end());
+    state_.draw_pile.clear();
+    for (int i = idx; i < TOTAL_CARDS; ++i) {
+        state_.draw_pile.push_back(full_cards[i]);
+    }
 
     // Clear building piles
-    for (auto& bp : state_.building_piles) bp.clear();
+    state_.building_pile_count = {};
 
     state_.current_player = 0;
     state_.game_over = false;
@@ -71,12 +74,13 @@ void Game::pass_turn() {
 }
 
 void Game::check_building_pile_completion(int pile) {
-    auto& bp = state_.building_piles[pile];
-    if (!bp.empty() && bp.size() >= static_cast<size_t>(CARD_MAX)) {
-        // Building pile is complete (reached 12). Recycle into draw pile.
-        state_.draw_pile.insert(state_.draw_pile.end(), bp.begin(), bp.end());
+    if (state_.building_pile_count[pile] >= CARD_MAX) {
+        // Building pile is complete (reached 12). Recycle cards 1-12 into draw pile.
+        for (Card c = CARD_MIN; c <= CARD_MAX; ++c) {
+            state_.draw_pile.push_back(c);
+        }
         std::shuffle(state_.draw_pile.begin(), state_.draw_pile.end(), rng_);
-        bp.clear();
+        state_.building_pile_count[pile] = 0;
     }
 }
 
@@ -107,13 +111,9 @@ static bool move_card(GameState& state, const Move& move) {
         player.discard_piles[di].push_back(card);
         player.remove_hand_card(move.hand_index());
     } else {
-        // Play onto a building pile
+        // Play onto a building pile — just increment count
         int bi = move.target_building_index();
-        Card effective = card;
-        if (is_skipbo(card)) {
-            effective = state.building_pile_needs(bi);
-        }
-        state.building_piles[bi].push_back(effective);
+        state.building_pile_count[bi]++;
 
         // Remove from source
         if (move.is_from_hand()) {
@@ -187,10 +187,11 @@ bool Game::apply_move_to_state(GameState& state, const Move& move) {
     // Building pile completion — recycle into draw pile
     if (!move.is_discard()) {
         int bi = move.target_building_index();
-        auto& bp = state.building_piles[bi];
-        if (bp.size() >= static_cast<size_t>(CARD_MAX)) {
-            state.draw_pile.insert(state.draw_pile.end(), bp.begin(), bp.end());
-            bp.clear();
+        if (state.building_pile_count[bi] >= CARD_MAX) {
+            for (Card c = CARD_MIN; c <= CARD_MAX; ++c) {
+                state.draw_pile.push_back(c);
+            }
+            state.building_pile_count[bi] = 0;
         }
     }
 

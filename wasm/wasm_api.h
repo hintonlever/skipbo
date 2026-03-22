@@ -48,12 +48,12 @@ public:
 
     // Building pile top card (-1 if empty)
     int getBuildingPileTop(int pile) const {
-        const auto& bp = game_.state().building_piles[pile];
-        return bp.empty() ? -1 : static_cast<int>(bp.back());
+        uint8_t cnt = game_.state().building_pile_count[pile];
+        return cnt == 0 ? -1 : static_cast<int>(cnt);
     }
 
     int getBuildingPileSize(int pile) const {
-        return static_cast<int>(game_.state().building_piles[pile].size());
+        return static_cast<int>(game_.state().building_pile_count[pile]);
     }
 
     // Discard pile top card (-1 if empty)

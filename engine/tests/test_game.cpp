@@ -23,7 +23,7 @@ TEST_CASE("Game setup creates valid initial state", "[game]") {
 
     // Building piles empty
     for (int i = 0; i < NUM_BUILDING_PILES; ++i) {
-        REQUIRE(state.building_piles[i].empty());
+        REQUIRE(state.building_pile_count[i] == 0);
     }
 
     // Total cards should be 162
@@ -36,7 +36,7 @@ TEST_CASE("Game setup creates valid initial state", "[game]") {
         }
     }
     for (int b = 0; b < NUM_BUILDING_PILES; ++b) {
-        total += state.building_piles[b].size();
+        total += state.building_pile_count[b];
     }
     REQUIRE(total == TOTAL_CARDS);
 }

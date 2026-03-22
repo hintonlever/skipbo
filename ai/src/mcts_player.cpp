@@ -11,55 +11,133 @@ namespace skipbo {
 MCTSPlayer::MCTSPlayer(uint64_t seed, MCTSConfig config)
     : rng_(seed), config_(config) {}
 
-// Heuristic rollout policy: prioritize stock→build, then any build play,
-// then discard. This lets rollouts discover tactical chains that random
-// play would almost never find.
-static const Move& pick_rollout_move(const std::vector<Move>& moves,
-                                      std::mt19937& rng) {
-    // Tier 1: stock → building pile (directly reduces stock = winning)
-    // Tier 2: any source → building pile (keeps turn going, progresses game)
-    // Tier 3: discard (ends turn)
-    // Within each tier, pick randomly.
-
-    thread_local std::vector<size_t> tier1, tier2, tier3;
-    tier1.clear(); tier2.clear(); tier3.clear();
-
-    for (size_t i = 0; i < moves.size(); ++i) {
-        if (moves[i].is_discard()) {
-            tier3.push_back(i);
-        } else if (moves[i].is_from_stock()) {
-            tier1.push_back(i);
-        } else {
-            tier2.push_back(i);
+// Fast heuristic move picker: directly scans the state for playable cards
+// without building a full move list. Priority: stock→build, then any→build,
+// then random discard.
+static bool try_find_build_move(const GameState& state, Move& out,
+                                 MoveSource source, Card card) {
+    if (card == CARD_NONE) return false;
+    for (int b = 0; b < NUM_BUILDING_PILES; ++b) {
+        if (state.can_play_on_building(card, b)) {
+            out = {source, static_cast<MoveTarget>(
+                static_cast<int>(MoveTarget::BuildingPile0) + b)};
+            return true;
         }
     }
+    return false;
+}
 
-    const auto& tier = !tier1.empty() ? tier1 : !tier2.empty() ? tier2 : tier3;
-    std::uniform_int_distribution<size_t> dist(0, tier.size() - 1);
-    return moves[tier[dist(rng)]];
+// Collect all building pile moves into a small fixed buffer. Returns count.
+static int collect_build_moves(const GameState& state, Move* buf, int capacity) {
+    int n = 0;
+    const auto& player = state.players[state.current_player];
+    // Stock
+    if (!player.stock_empty()) {
+        Card c = player.stock_top();
+        for (int b = 0; b < NUM_BUILDING_PILES && n < capacity; ++b)
+            if (state.can_play_on_building(c, b))
+                buf[n++] = {MoveSource::StockPile, static_cast<MoveTarget>(
+                    static_cast<int>(MoveTarget::BuildingPile0) + b)};
+    }
+    // Hand
+    for (int h = 0; h < player.hand_count && n < capacity; ++h) {
+        Card c = player.hand[h];
+        auto src = static_cast<MoveSource>(static_cast<int>(MoveSource::Hand0) + h);
+        for (int b = 0; b < NUM_BUILDING_PILES && n < capacity; ++b)
+            if (state.can_play_on_building(c, b))
+                buf[n++] = {src, static_cast<MoveTarget>(
+                    static_cast<int>(MoveTarget::BuildingPile0) + b)};
+    }
+    // Discard piles
+    for (int d = 0; d < NUM_DISCARD_PILES && n < capacity; ++d) {
+        if (!player.discard_empty(d)) {
+            Card c = player.discard_top(d);
+            auto src = static_cast<MoveSource>(
+                static_cast<int>(MoveSource::DiscardPile0) + d);
+            for (int b = 0; b < NUM_BUILDING_PILES && n < capacity; ++b)
+                if (state.can_play_on_building(c, b))
+                    buf[n++] = {src, static_cast<MoveTarget>(
+                        static_cast<int>(MoveTarget::BuildingPile0) + b)};
+        }
+    }
+    return n;
+}
+
+static Move pick_heuristic_move(const GameState& state, std::mt19937& rng) {
+    const auto& player = state.players[state.current_player];
+    Move m;
+
+    // Tier 1: stock → build (always take this)
+    if (!player.stock_empty() && try_find_build_move(state, m, MoveSource::StockPile, player.stock_top()))
+        return m;
+
+    // Tier 2: any source → build (pick randomly from available)
+    Move buf[64];
+    int n = collect_build_moves(state, buf, 64);
+    if (n > 0) {
+        std::uniform_int_distribution<int> dist(0, n - 1);
+        return buf[dist(rng)];
+    }
+
+    // Tier 3: random discard
+    if (player.hand_count > 0) {
+        std::uniform_int_distribution<int> h_dist(0, player.hand_count - 1);
+        std::uniform_int_distribution<int> d_dist(0, NUM_DISCARD_PILES - 1);
+        auto src = static_cast<MoveSource>(static_cast<int>(MoveSource::Hand0) + h_dist(rng));
+        auto tgt = static_cast<MoveTarget>(static_cast<int>(MoveTarget::DiscardPile0) + d_dist(rng));
+        return {src, tgt};
+    }
+
+    // No moves (shouldn't reach here in normal play)
+    return {MoveSource::Hand0, MoveTarget::DiscardPile0};
+}
+
+static Move pick_random_move(const GameState& state, std::mt19937& rng) {
+    const auto& player = state.players[state.current_player];
+
+    // Collect build moves + discard moves into a compact list
+    Move buf[64];
+    int n = collect_build_moves(state, buf, 48);
+
+    // Add discard options
+    for (int h = 0; h < player.hand_count && n < 64; ++h) {
+        auto src = static_cast<MoveSource>(static_cast<int>(MoveSource::Hand0) + h);
+        for (int d = 0; d < NUM_DISCARD_PILES && n < 64; ++d) {
+            buf[n++] = {src, static_cast<MoveTarget>(
+                static_cast<int>(MoveTarget::DiscardPile0) + d)};
+        }
+    }
+    if (n == 0) return {MoveSource::Hand0, MoveTarget::DiscardPile0};
+    std::uniform_int_distribution<int> dist(0, n - 1);
+    return buf[dist(rng)];
 }
 
 static double rollout(GameState state, int perspective, double heuristic_rate,
                       std::mt19937& rng) {
-    std::vector<Move> moves;
     std::uniform_real_distribution<double> coin(0.0, 1.0);
     int max_moves = 500;
     int consecutive_passes = 0;
     while (!state.game_over && max_moves-- > 0 && consecutive_passes < 4) {
-        moves.clear();
-        get_legal_moves(state, moves);
-        if (moves.empty()) {
-            state.current_player = 1 - state.current_player;
-            consecutive_passes++;
-            continue;
+        const auto& player = state.players[state.current_player];
+        // Quick check: any hand cards or playable stock/discard?
+        if (player.hand_count == 0 && player.stock_empty()) {
+            bool has_move = false;
+            for (int d = 0; d < NUM_DISCARD_PILES && !has_move; ++d)
+                if (!player.discard_empty(d))
+                    for (int b = 0; b < NUM_BUILDING_PILES && !has_move; ++b)
+                        if (state.can_play_on_building(player.discard_top(d), b))
+                            has_move = true;
+            if (!has_move) {
+                state.current_player = 1 - state.current_player;
+                consecutive_passes++;
+                continue;
+            }
         }
         consecutive_passes = 0;
-        if (coin(rng) < heuristic_rate) {
-            Game::apply_move_to_state(state, pick_rollout_move(moves, rng));
-        } else {
-            std::uniform_int_distribution<size_t> dist(0, moves.size() - 1);
-            Game::apply_move_to_state(state, moves[dist(rng)]);
-        }
+        Move m = (coin(rng) < heuristic_rate)
+            ? pick_heuristic_move(state, rng)
+            : pick_random_move(state, rng);
+        Game::apply_move_to_state(state, m);
     }
     if (state.winner == perspective) return 1.0;
     if (state.winner == 1 - perspective) return 0.0;
@@ -69,12 +147,6 @@ static double rollout(GameState state, int perspective, double heuristic_rate,
     if (my_stock > opp_stock) return 0.25;
     return 0.5;
 }
-
-struct MoveHash {
-    size_t operator()(const Move& m) const {
-        return (static_cast<size_t>(m.source) << 8) | static_cast<size_t>(m.target);
-    }
-};
 
 std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
         const GameState& observable_state,
@@ -105,12 +177,13 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
 
             // EXPAND
             if (!node->fully_expanded() && !sim_state.game_over) {
-                std::uniform_int_distribution<size_t> dist(
+                std::uniform_int_distribution<int> dist(
                     0, node->untried_moves.size() - 1);
-                size_t idx = dist(rng_);
+                int idx = dist(rng_);
                 Move expand_move = node->untried_moves[idx];
                 Game::apply_move_to_state(sim_state, expand_move);
-                auto next_moves = get_legal_moves(sim_state);
+                MoveList next_moves;
+                get_legal_moves(sim_state, next_moves);
                 node = node->add_child(expand_move, next_moves);
             }
 

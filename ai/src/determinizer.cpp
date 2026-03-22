@@ -13,31 +13,33 @@ GameState Determinizer::sample(const GameState& state, int perspective,
     // - opponent's hand
     // - opponent's stock pile (all except top card)
     // - draw pile
-    std::vector<Card> hidden;
+    // Use stack-allocated buffer instead of std::vector
+    Card hidden[TOTAL_CARDS];
+    int hidden_count = 0;
 
     // Opponent's hand cards
     auto& opp = result.players[opponent];
     for (int i = 0; i < opp.hand_count; ++i) {
-        hidden.push_back(opp.hand[i]);
+        hidden[hidden_count++] = opp.hand[i];
     }
 
     // Opponent's stock pile interior (all except top)
     if (opp.stock_pile.size() > 1) {
-        for (size_t i = 0; i < opp.stock_pile.size() - 1; ++i) {
-            hidden.push_back(opp.stock_pile[i]);
+        for (int i = 0; i < opp.stock_pile.size() - 1; ++i) {
+            hidden[hidden_count++] = opp.stock_pile[i];
         }
     }
 
     // Draw pile
-    for (Card c : result.draw_pile) {
-        hidden.push_back(c);
+    for (int i = 0; i < result.draw_pile.size(); ++i) {
+        hidden[hidden_count++] = result.draw_pile[i];
     }
 
     // Shuffle hidden cards
-    std::shuffle(hidden.begin(), hidden.end(), rng);
+    std::shuffle(hidden, hidden + hidden_count, rng);
 
     // Redistribute hidden cards
-    size_t idx = 0;
+    int idx = 0;
 
     // Opponent's hand
     for (int i = 0; i < opp.hand_count; ++i) {
@@ -49,8 +51,10 @@ GameState Determinizer::sample(const GameState& state, int perspective,
     if (!opp.stock_pile.empty()) {
         stock_top = opp.stock_pile.back();
     }
-    for (size_t i = 0; i < opp.stock_pile.size() - 1; ++i) {
-        opp.stock_pile[i] = hidden[idx++];
+    if (opp.stock_pile.size() > 1) {
+        for (int i = 0; i < opp.stock_pile.size() - 1; ++i) {
+            opp.stock_pile[i] = hidden[idx++];
+        }
     }
     if (!opp.stock_pile.empty()) {
         opp.stock_pile.back() = stock_top;
@@ -58,7 +62,7 @@ GameState Determinizer::sample(const GameState& state, int perspective,
 
     // Draw pile
     result.draw_pile.clear();
-    while (idx < hidden.size()) {
+    while (idx < hidden_count) {
         result.draw_pile.push_back(hidden[idx++]);
     }
 

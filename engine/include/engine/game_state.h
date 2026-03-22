@@ -2,7 +2,6 @@
 
 #include "engine/card.h"
 #include <array>
-#include <vector>
 #include <cstdint>
 
 namespace skipbo {
@@ -14,14 +13,14 @@ constexpr int NUM_BUILDING_PILES = 4;
 constexpr int STOCK_PILE_SIZE = 30;
 
 struct PlayerState {
-    std::vector<Card> stock_pile;    // top card is back()
-    std::array<Card, HAND_SIZE> hand;
-    uint8_t hand_count = 0;          // number of cards in hand (packed left)
-    std::array<std::vector<Card>, NUM_DISCARD_PILES> discard_piles;
+    CardStack<STOCK_PILE_SIZE> stock_pile;
+    std::array<Card, HAND_SIZE> hand{CARD_NONE, CARD_NONE, CARD_NONE, CARD_NONE, CARD_NONE};
+    uint8_t hand_count = 0;
+    std::array<CardStack<TOTAL_CARDS>, NUM_DISCARD_PILES> discard_piles;
 
     Card stock_top() const;
     bool stock_empty() const { return stock_pile.empty(); }
-    int stock_size() const { return static_cast<int>(stock_pile.size()); }
+    int stock_size() const { return stock_pile.size(); }
     Card discard_top(int pile) const;
     bool discard_empty(int pile) const { return discard_piles[pile].empty(); }
 
@@ -30,17 +29,26 @@ struct PlayerState {
 
 struct GameState {
     std::array<PlayerState, NUM_PLAYERS> players;
-    std::array<std::vector<Card>, NUM_BUILDING_PILES> building_piles;
-    std::vector<Card> draw_pile;
+    // Building piles store only their count (0-12). Cards are always 1..count.
+    // This avoids storing/copying actual card values since they're deterministic.
+    std::array<uint8_t, NUM_BUILDING_PILES> building_pile_count{};
+    CardStack<TOTAL_CARDS> draw_pile;
     uint8_t current_player = 0;
     bool game_over = false;
     int8_t winner = -1;
 
-    // Get the value needed next on a building pile (1 if empty, top+1 otherwise)
-    Card building_pile_needs(int pile) const;
+    // Get the value needed next on a building pile (1 if empty, count+1 otherwise)
+    Card building_pile_needs(int pile) const {
+        return static_cast<Card>(building_pile_count[pile] + 1);
+    }
 
     // Check if a card can be played on a building pile
-    bool can_play_on_building(Card card, int pile) const;
+    bool can_play_on_building(Card card, int pile) const {
+        uint8_t cnt = building_pile_count[pile];
+        if (cnt >= CARD_MAX) return false; // pile is full (shouldn't happen, recycled at 12)
+        if (is_skipbo(card)) return true;
+        return card == cnt + 1;
+    }
 };
 
 } // namespace skipbo

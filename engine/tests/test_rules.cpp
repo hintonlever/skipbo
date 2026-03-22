@@ -66,8 +66,8 @@ TEST_CASE("Stock pile top can play on building piles", "[rules]") {
     }
     REQUIRE(stock_moves == 0);
 
-    // Put 1,2 on building pile 0 so it needs 3
-    gs.building_piles[0] = {1, 2};
+    // Put 2 cards on building pile 0 so it needs 3
+    gs.building_pile_count[0] = 2; // contains cards 1,2
     moves = get_legal_moves(gs);
     stock_moves = 0;
     for (const auto& m : moves) {

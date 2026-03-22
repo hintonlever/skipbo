@@ -60,4 +60,30 @@ struct Move {
 
 std::string move_to_string(const Move& m);
 
+// Fixed-capacity move list — avoids std::vector allocation in hot paths.
+constexpr int MAX_LEGAL_MOVES = 64;
+
+struct MoveList {
+    Move moves[MAX_LEGAL_MOVES];
+    uint8_t count = 0;
+
+    MoveList() = default;
+
+    void push_back(const Move& m) { moves[count++] = m; }
+    bool empty() const { return count == 0; }
+    int size() const { return count; }
+    void clear() { count = 0; }
+
+    Move& operator[](int i) { return moves[i]; }
+    const Move& operator[](int i) const { return moves[i]; }
+
+    Move* begin() { return moves; }
+    Move* end() { return moves + count; }
+    const Move* begin() const { return moves; }
+    const Move* end() const { return moves + count; }
+
+    // O(1) erase by swapping with last element (order not preserved)
+    void swap_erase(int i) { moves[i] = moves[--count]; }
+};
+
 } // namespace skipbo

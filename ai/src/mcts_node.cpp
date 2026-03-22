@@ -4,8 +4,12 @@
 
 namespace skipbo {
 
-MCTSNode::MCTSNode(const std::vector<Move>& legal_moves)
+MCTSNode::MCTSNode(const MoveList& legal_moves)
     : untried_moves(legal_moves) {}
+
+MCTSNode::MCTSNode(const std::vector<Move>& legal_moves) {
+    for (const auto& m : legal_moves) untried_moves.push_back(m);
+}
 
 double MCTSNode::ucb1(double exploration) const {
     if (visits == 0) return std::numeric_limits<double>::infinity();
@@ -28,15 +32,15 @@ MCTSNode* MCTSNode::select_child() {
     return best;
 }
 
-MCTSNode* MCTSNode::add_child(const Move& m, const std::vector<Move>& legal_moves) {
+MCTSNode* MCTSNode::add_child(const Move& m, const MoveList& legal_moves) {
     auto child = std::make_unique<MCTSNode>(legal_moves);
     child->move = m;
     child->parent = this;
 
-    // Remove from untried
-    for (auto it = untried_moves.begin(); it != untried_moves.end(); ++it) {
-        if (*it == m) {
-            untried_moves.erase(it);
+    // Remove from untried (swap-and-pop for O(1))
+    for (int i = 0; i < untried_moves.size(); ++i) {
+        if (untried_moves[i] == m) {
+            untried_moves.swap_erase(i);
             break;
         }
     }
