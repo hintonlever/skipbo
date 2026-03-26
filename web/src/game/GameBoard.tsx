@@ -5,6 +5,41 @@ import { DiscardPileView } from './DiscardPileView';
 import { type GameEngine, DIFFICULTY_PRESETS } from '../hooks/useGameEngine';
 import { MoveSource, MoveTarget, cardToString, type GameSnapshot } from '../wasm/types';
 
+function snapshotToText(snap: GameSnapshot): string {
+  const c = (card: number) => cardToString(card) || '--';
+  const pileStr = (cards: number[]) =>
+    cards.length === 0 ? 'empty' : cards.map(c).join(', ');
+
+  const lines: string[] = ['=== SKIP-BO GAME STATE ==='];
+  lines.push(`Turn: ${snap.currentPlayer === 0 ? 'You' : 'AI'}${snap.isGameOver ? ` | Game over — ${snap.winner === 0 ? 'You win' : 'AI wins'}` : ''}`);
+  lines.push('');
+
+  // AI
+  lines.push(`--- AI ---`);
+  lines.push(`Stock: ${c(snap.stockTop[1])} (${snap.stockSize[1]} cards)`);
+  for (let d = 0; d < 4; d++) {
+    lines.push(`Discard ${d + 1}: ${pileStr(snap.discardPileCards[1][d])}`);
+  }
+  lines.push('');
+
+  // Building piles
+  lines.push('--- Building Piles ---');
+  for (let b = 0; b < 4; b++) {
+    lines.push(`Pile ${b + 1}: ${c(snap.buildingPiles[b])}${snap.buildingPileSizes[b] > 0 ? ` (${snap.buildingPileSizes[b]} deep)` : ''}`);
+  }
+  lines.push('');
+
+  // Player
+  lines.push('--- You ---');
+  lines.push(`Stock: ${c(snap.stockTop[0])} (${snap.stockSize[0]} cards)`);
+  for (let d = 0; d < 4; d++) {
+    lines.push(`Discard ${d + 1}: ${pileStr(snap.discardPileCards[0][d])}`);
+  }
+  lines.push(`Hand: ${snap.hand.map(c).join(', ')}`);
+
+  return lines.join('\n');
+}
+
 interface GameBoardProps {
   engine: GameEngine;
 }
@@ -37,6 +72,8 @@ export function GameBoard({ engine }: GameBoardProps) {
   const { snapshot, isAIThinking, isAnalyzing, playMove, newGame, mctsConfig, setMctsConfig,
     analysis, showAnalysis, toggleAnalysis, isLoading } = engine;
   const [selectedSource, setSelectedSource] = useState<MoveSource | null>(null);
+  const [showStateText, setShowStateText] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   // Compute which sources and targets are valid
   const validSources = useMemo(() => {
@@ -119,6 +156,20 @@ export function GameBoard({ engine }: GameBoardProps) {
             {showAnalysis ? 'Hide Analysis' : 'Show Analysis'}
           </button>
           <button
+            onClick={() => {
+              setShowStateText(v => !v);
+              setCopied(false);
+            }}
+            style={{
+              padding: '4px 12px', borderRadius: 4, cursor: 'pointer',
+              border: '1px solid #d1d5db',
+              backgroundColor: showStateText ? '#dbeafe' : '#fff',
+              fontSize: '13px',
+            }}
+          >
+            Copy State
+          </button>
+          <button
             onClick={newGame}
             style={{
               padding: '4px 12px', borderRadius: 4, cursor: 'pointer',
@@ -144,6 +195,36 @@ export function GameBoard({ engine }: GameBoardProps) {
           selectedSource !== null ? 'Click a target pile' : 'Click a card to play'
         ) : 'Waiting...'}
       </div>
+
+      {/* Copyable state text */}
+      {showStateText && (
+        <div style={{ marginBottom: 16, position: 'relative' }}>
+          <textarea
+            readOnly
+            value={snapshotToText(snapshot)}
+            style={{
+              width: '100%', height: 260, fontFamily: 'monospace', fontSize: '12px',
+              padding: '8px', borderRadius: 6, border: '1px solid #d1d5db',
+              backgroundColor: '#f9fafb', resize: 'vertical', boxSizing: 'border-box',
+            }}
+            onFocus={e => e.target.select()}
+          />
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(snapshotToText(snapshot));
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            }}
+            style={{
+              position: 'absolute', top: 8, right: 8, padding: '3px 10px',
+              borderRadius: 4, border: '1px solid #d1d5db', cursor: 'pointer',
+              backgroundColor: copied ? '#dcfce7' : '#fff', fontSize: '12px',
+            }}
+          >
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
+      )}
 
       {/* Opponent area */}
       <div style={{
