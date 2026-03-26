@@ -5,6 +5,7 @@
 #include "engine/game.h"
 #include <cassert>
 #include <map>
+#include <algorithm>
 
 namespace skipbo {
 
@@ -143,21 +144,11 @@ static double rollout(GameState state, int perspective, double heuristic_rate,
         moves_made++;
     }
 
-    // Terminal win/loss
-    if (state.winner == perspective) return 1.0;
-    if (state.winner == 1 - perspective) return 0.0;
-
-    // Score by stock card progress from root state (not rollout start)
-    // This ensures moves played during SELECT+EXPAND get credit
+    // Net stock card progress from root state: +1 per card I cleared, -1 per card opponent cleared.
+    // A value of 0.5 means on average I clear half a card more than opponent.
     int my_progress = root_my_stock - state.players[perspective].stock_size();
     int opp_progress = root_opp_stock - state.players[1 - perspective].stock_size();
-    int delta = my_progress - opp_progress;
-
-    // Normalize to [0, 1], clamped
-    double reward = 0.5 + static_cast<double>(delta) / (2.0 * rollout_depth);
-    if (reward < 0.0) reward = 0.0;
-    if (reward > 1.0) reward = 1.0;
-    return reward;
+    return static_cast<double>(my_progress - opp_progress);
 }
 
 std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
@@ -182,15 +173,17 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
         for (int iter = 0; iter < config_.iterations_per_det; ++iter) {
             GameState sim_state = det_state;
             MCTSNode* node = &root;
+            int depth = 0;
 
-            // SELECT
-            while (node->fully_expanded() && !node->is_leaf()) {
+            // SELECT (limited by max_tree_depth)
+            while (node->fully_expanded() && !node->is_leaf() && depth < config_.max_tree_depth) {
                 node = node->select_child();
                 Game::apply_move_to_state(sim_state, node->move);
+                depth++;
             }
 
             // EXPAND
-            if (!node->fully_expanded() && !sim_state.game_over) {
+            if (!node->fully_expanded() && !sim_state.game_over && depth < config_.max_tree_depth) {
                 std::uniform_int_distribution<int> dist(
                     0, node->untried_moves.size() - 1);
                 int idx = dist(rng_);
@@ -242,6 +235,95 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
         results.push_back({legal_moves[i], score, visits});
     }
     return results;
+}
+
+// Recursively serialize MCTS tree in DFS order.
+// Each node: [parentIdx, source, target, visits, avgReward*1000]
+static void serialize_node(const MCTSNode& node, int parent_idx, int depth,
+                           int max_depth, int top_n, std::vector<int>& out) {
+    int my_idx = static_cast<int>(out.size() / 5);
+
+    out.push_back(parent_idx);
+    out.push_back(parent_idx == -1 ? -1 : static_cast<int>(node.move.source));
+    out.push_back(parent_idx == -1 ? -1 : static_cast<int>(node.move.target));
+    out.push_back(node.visits);
+    int avg_reward = node.visits > 0
+        ? static_cast<int>(node.total_reward / node.visits * 1000)
+        : 0;
+    out.push_back(avg_reward);
+
+    if (depth >= max_depth || node.children.empty()) return;
+
+    // Sort children by visits descending, take top N
+    std::vector<const MCTSNode*> sorted;
+    sorted.reserve(node.children.size());
+    for (const auto& c : node.children) {
+        if (c->visits > 0) sorted.push_back(c.get());
+    }
+    std::sort(sorted.begin(), sorted.end(),
+              [](const MCTSNode* a, const MCTSNode* b) { return a->visits > b->visits; });
+
+    int n = std::min(top_n, static_cast<int>(sorted.size()));
+    for (int i = 0; i < n; ++i) {
+        serialize_node(*sorted[i], my_idx, depth + 1, max_depth, top_n, out);
+    }
+}
+
+std::vector<int> MCTSPlayer::analyze_tree(
+        const GameState& observable_state,
+        const std::vector<Move>& legal_moves,
+        int viz_max_depth, int viz_top_n) {
+
+    if (legal_moves.empty()) return {};
+
+    // Run a single determinization
+    GameState det_state = Determinizer::sample(
+        observable_state, observable_state.current_player, rng_);
+
+    MCTSNode root(legal_moves);
+    int my_id = observable_state.current_player;
+    int root_my_stock = observable_state.players[my_id].stock_size();
+    int root_opp_stock = observable_state.players[1 - my_id].stock_size();
+
+    for (int iter = 0; iter < config_.iterations_per_det; ++iter) {
+        GameState sim_state = det_state;
+        MCTSNode* node = &root;
+        int depth = 0;
+
+        // SELECT
+        while (node->fully_expanded() && !node->is_leaf() && depth < config_.max_tree_depth) {
+            node = node->select_child();
+            Game::apply_move_to_state(sim_state, node->move);
+            depth++;
+        }
+
+        // EXPAND
+        if (!node->fully_expanded() && !sim_state.game_over && depth < config_.max_tree_depth) {
+            std::uniform_int_distribution<int> dist(0, node->untried_moves.size() - 1);
+            int idx = dist(rng_);
+            Move expand_move = node->untried_moves[idx];
+            Game::apply_move_to_state(sim_state, expand_move);
+            MoveList next_moves;
+            get_legal_moves(sim_state, next_moves);
+            node = node->add_child(expand_move, next_moves);
+        }
+
+        // ROLLOUT
+        double reward = rollout(sim_state, my_id, config_.rollout_heuristic_rate,
+                                config_.rollout_depth, root_my_stock, root_opp_stock, rng_);
+
+        // BACKPROPAGATE
+        while (node != nullptr) {
+            node->visits++;
+            node->total_reward += reward;
+            node = node->parent;
+        }
+    }
+
+    // Serialize the tree
+    std::vector<int> result;
+    serialize_node(root, -1, 0, viz_max_depth, viz_top_n, result);
+    return result;
 }
 
 Move MCTSPlayer::choose_move(const GameState& observable_state,

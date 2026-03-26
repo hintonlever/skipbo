@@ -7,6 +7,8 @@ using namespace skipbo;
 EMSCRIPTEN_BINDINGS(skipbo) {
     register_vector<int>("VectorInt");
 
+    function("runMatch", &skipbo::wasm_run_match);
+
     class_<WasmGameController>("GameController")
         .constructor<int>()
         // State queries
@@ -27,8 +29,10 @@ EMSCRIPTEN_BINDINGS(skipbo) {
         // Actions
         .function("applyMove", &WasmGameController::applyMove)
         .function("playAITurn", &WasmGameController::playAITurn)
+        .function("playHeuristicAITurn", &WasmGameController::playHeuristicAITurn)
         .function("passTurn", &WasmGameController::passTurn)
         // Analysis
         .function("analyzeMoves", &WasmGameController::analyzeMoves)
+        .function("analyzeTree", &WasmGameController::analyzeTree)
         ;
 }

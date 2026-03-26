@@ -23,7 +23,7 @@ export interface Move {
 }
 
 export interface MoveWithAnalysis extends Move {
-  winProbability: number;
+  reward: number; // avg MCTS reward (net stock progress), can be negative
 }
 
 export interface GameSnapshot {
@@ -66,8 +66,45 @@ export function parseAnalysis(flat: number[]): MoveWithAnalysis[] {
     result.push({
       source: flat[i] as MoveSource,
       target: flat[i + 1] as MoveTarget,
-      winProbability: flat[i + 2] / 1000,
+      reward: flat[i + 2] / 1000,
     });
   }
   return result;
+}
+
+// MCTS tree node for visualization
+export interface TreeNode {
+  index: number;
+  parentIndex: number;
+  source: number;
+  target: number;
+  visits: number;
+  avgReward: number;
+  children: TreeNode[];
+}
+
+// Parse flat tree array [parentIdx, source, target, visits, avgReward*1000, ...] into a tree
+export function parseTree(flat: number[]): TreeNode | null {
+  if (flat.length < 5) return null;
+
+  const nodes: TreeNode[] = [];
+  for (let i = 0; i < flat.length; i += 5) {
+    nodes.push({
+      index: i / 5,
+      parentIndex: flat[i],
+      source: flat[i + 1],
+      target: flat[i + 2],
+      visits: flat[i + 3],
+      avgReward: flat[i + 4] / 1000,
+      children: [],
+    });
+  }
+
+  // Build tree by linking children to parents
+  for (let i = 1; i < nodes.length; i++) {
+    const parent = nodes[nodes[i].parentIndex];
+    if (parent) parent.children.push(nodes[i]);
+  }
+
+  return nodes[0];
 }

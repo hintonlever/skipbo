@@ -1,4 +1,5 @@
 #include "ai/random_player.h"
+#include "ai/heuristic_player.h"
 #include "ai/mcts_player.h"
 #include "tournament/tournament.h"
 #include <iostream>
@@ -53,11 +54,14 @@ int main(int argc, char** argv) {
 
     if (round_robin) {
         RandomPlayer random_player(seed);
+        HeuristicPlayer heuristic_player;
         auto mcts_random_d5 = make_mcts(seed + 1, 0.0, 5);
         auto mcts_heuristic_d5 = make_mcts(seed + 2, heuristic_rate, 5);
         auto mcts_heuristic_d10 = make_mcts(seed + 3, heuristic_rate, 10);
 
         struct { Player& a; Player& b; } pairings[] = {
+            {heuristic_player, random_player},
+            {mcts_heuristic_d5, heuristic_player},
             {mcts_heuristic_d5, random_player},
             {mcts_random_d5, random_player},
             {mcts_heuristic_d5, mcts_random_d5},

@@ -21,7 +21,7 @@ double MCTSNode::ucb1(double exploration) const {
 MCTSNode* MCTSNode::select_child() {
     assert(!children.empty());
     MCTSNode* best = nullptr;
-    double best_score = -1.0;
+    double best_score = -std::numeric_limits<double>::infinity();
     for (auto& child : children) {
         double score = child->ucb1();
         if (score > best_score) {

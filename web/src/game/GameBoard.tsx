@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { CardView } from './CardView';
 import { PileView } from './PileView';
 import { DiscardPileView } from './DiscardPileView';
-import { type GameEngine, DIFFICULTY_PRESETS } from '../hooks/useGameEngine';
+import { type GameEngine, DIFFICULTY_PRESETS, type AIType } from '../hooks/useGameEngine';
 import { MoveSource, MoveTarget, cardToString, type GameSnapshot } from '../wasm/types';
 
 function snapshotToText(snap: GameSnapshot): string {
@@ -69,8 +69,8 @@ function targetLabel(t: MoveTarget, snap: GameSnapshot): string {
 }
 
 export function GameBoard({ engine }: GameBoardProps) {
-  const { snapshot, isAIThinking, isAnalyzing, playMove, newGame, mctsConfig, setMctsConfig,
-    analysis, showAnalysis, toggleAnalysis, reanalyze, isLoading } = engine;
+  const { snapshot, isAIThinking, isAnalyzing, playMove, newGame, aiType, mctsConfig, setMctsConfig,
+    setAIType, analysis, showAnalysis, toggleAnalysis, reanalyze, isLoading } = engine;
   const [selectedSource, setSelectedSource] = useState<MoveSource | null>(null);
   const [showStateText, setShowStateText] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -90,9 +90,9 @@ export function GameBoard({ engine }: GameBoardProps) {
     );
   }, [snapshot, selectedSource]);
 
-  const getBestWinProb = (): number => {
+  const getBestReward = (): number => {
     if (!analysis || analysis.length === 0) return 0;
-    return Math.max(...analysis.map(a => a.winProbability));
+    return Math.max(...analysis.map(a => a.reward));
   };
 
   if (isLoading || !snapshot) {
@@ -128,12 +128,13 @@ export function GameBoard({ engine }: GameBoardProps) {
         <h1 style={{ margin: 0, fontSize: '24px', fontWeight: 700 }}>Skip-Bo</h1>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {DIFFICULTY_PRESETS.map((p) => {
-            const active = mctsConfig.iterations === p.config.iterations
-              && mctsConfig.determinizations === p.config.determinizations;
+            const active = aiType === p.aiType
+              && (p.aiType === 'heuristic' || (mctsConfig.iterations === p.config.iterations
+              && mctsConfig.determinizations === p.config.determinizations));
             return (
               <button
                 key={p.label}
-                onClick={() => setMctsConfig(p.config)}
+                onClick={() => { setAIType(p.aiType); setMctsConfig(p.config); }}
                 style={{
                   padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
                   border: '1px solid #d1d5db',
@@ -359,17 +360,18 @@ export function GameBoard({ engine }: GameBoardProps) {
 
       {/* Move analysis */}
       <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: 8, color: '#7c3aed' }}>
-        Move Analysis (win %)
+        Move Analysis (reward)
       </div>
       {analysis && analysis.length > 0 ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {[...analysis]
-            .sort((a, b) => b.winProbability - a.winProbability)
+            .sort((a, b) => b.reward - a.reward)
             .slice(0, 10)
             .map((a, i) => {
-              const best = getBestWinProb();
-              const isBest = Math.abs(a.winProbability - best) < 0.001;
-              const pct = (a.winProbability * 100).toFixed(1);
+              const best = getBestReward();
+              const isBest = Math.abs(a.reward - best) < 0.001;
+              const rewardStr = (a.reward >= 0 ? '+' : '') + a.reward.toFixed(2);
+              const color = a.reward > 0.5 ? '#16a34a' : a.reward > 0 ? '#65a30d' : a.reward > -0.5 ? '#ca8a04' : '#dc2626';
               return (
                 <div key={i} style={{
                   display: 'flex', alignItems: 'center', gap: 6,
@@ -379,19 +381,9 @@ export function GameBoard({ engine }: GameBoardProps) {
                   <span style={{ width: 120, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {sourceLabel(a.source, snapshot)} → {targetLabel(a.target, snapshot)}
                   </span>
-                  <div style={{
-                    flex: 1, height: 12, backgroundColor: '#e5e7eb', borderRadius: 4,
-                    overflow: 'hidden',
-                  }}>
-                    <div style={{
-                      width: `${a.winProbability * 100}%`,
-                      height: '100%',
-                      backgroundColor: a.winProbability > 0.5 ? '#22c55e' : a.winProbability > 0.3 ? '#eab308' : '#ef4444',
-                      borderRadius: 4,
-                      transition: 'width 0.3s',
-                    }} />
-                  </div>
-                  <span style={{ width: 40, textAlign: 'right', fontSize: '11px' }}>{pct}%</span>
+                  <span style={{ width: 50, textAlign: 'right', fontSize: '12px', fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>
+                    {rewardStr}
+                  </span>
                 </div>
               );
             })}
@@ -455,7 +447,21 @@ export function GameBoard({ engine }: GameBoardProps) {
             />
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 80, color: '#6b7280' }}>Depth</span>
+            <span style={{ width: 80, color: '#6b7280' }}>Tree Depth</span>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={mctsConfig.treeDepth}
+              onChange={e => setMctsConfig({ ...mctsConfig, treeDepth: Number(e.target.value) })}
+              style={{
+                width: 80, padding: '2px 6px', borderRadius: 4,
+                border: '1px solid #d1d5db', fontSize: '12px',
+              }}
+            />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 80, color: '#6b7280' }}>Rollout Depth</span>
             <input
               type="number"
               min={1}

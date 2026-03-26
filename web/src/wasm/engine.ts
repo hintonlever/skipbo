@@ -2,6 +2,11 @@
 
 export interface SkipBoModule {
   GameController: new (seed: number) => GameController;
+  runMatch(
+    p0Type: number, p0Iters: number, p0Dets: number, p0Heuristic: number, p0Rollout: number, p0Tree: number,
+    p1Type: number, p1Iters: number, p1Dets: number, p1Heuristic: number, p1Rollout: number, p1Tree: number,
+    seed: number
+  ): VectorInt;
 }
 
 export interface VectorInt {
@@ -25,9 +30,11 @@ export interface GameController {
   getSkipBoPlayed(player: number): number;
   getLegalMoves(): VectorInt;
   applyMove(source: number, target: number): boolean;
-  playAITurn(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number): VectorInt;
+  playAITurn(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number, treeDepth: number): VectorInt;
+  playHeuristicAITurn(): VectorInt;
   passTurn(): void;
-  analyzeMoves(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number): VectorInt;
+  analyzeMoves(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number, treeDepth: number): VectorInt;
+  analyzeTree(iterations: number, heuristicPct: number, rolloutDepth: number, treeDepth: number, vizMaxDepth: number, vizTopN: number): VectorInt;
   delete(): void;
 }
 
