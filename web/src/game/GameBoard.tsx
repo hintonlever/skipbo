@@ -70,7 +70,7 @@ function targetLabel(t: MoveTarget, snap: GameSnapshot): string {
 
 export function GameBoard({ engine }: GameBoardProps) {
   const { snapshot, isAIThinking, isAnalyzing, playMove, newGame, mctsConfig, setMctsConfig,
-    analysis, showAnalysis, toggleAnalysis, isLoading } = engine;
+    analysis, showAnalysis, toggleAnalysis, reanalyze, isLoading } = engine;
   const [selectedSource, setSelectedSource] = useState<MoveSource | null>(null);
   const [showStateText, setShowStateText] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -468,8 +468,24 @@ export function GameBoard({ engine }: GameBoardProps) {
               }}
             />
           </label>
-          <div style={{ color: '#9ca3af', fontSize: '11px' }}>
-            {(mctsConfig.iterations * mctsConfig.determinizations).toLocaleString()} total sims
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ color: '#9ca3af', fontSize: '11px' }}>
+              {(mctsConfig.iterations * mctsConfig.determinizations).toLocaleString()} total sims
+            </div>
+            <button
+              onClick={reanalyze}
+              disabled={isAnalyzing || !isMyTurn}
+              style={{
+                marginLeft: 'auto', padding: '3px 10px', borderRadius: 4,
+                cursor: isAnalyzing || !isMyTurn ? 'default' : 'pointer',
+                border: '1px solid #c084fc',
+                backgroundColor: isAnalyzing ? '#f3e8ff' : '#7c3aed',
+                color: isAnalyzing ? '#9ca3af' : '#fff',
+                fontSize: '12px', fontWeight: 600,
+              }}
+            >
+              {isAnalyzing ? 'Running...' : 'Re-analyze'}
+            </button>
           </div>
         </div>
       </div>

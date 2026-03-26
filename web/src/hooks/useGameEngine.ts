@@ -51,6 +51,7 @@ export interface GameEngine {
   newGame: () => void;
   setMctsConfig: (config: MCTSConfig) => void;
   toggleAnalysis: () => void;
+  reanalyze: () => void;
 }
 
 export function useGameEngine(): GameEngine {
@@ -167,5 +168,6 @@ export function useGameEngine(): GameEngine {
     newGame: startGame,
     setMctsConfig,
     toggleAnalysis,
+    reanalyze: runAnalysis,
   };
 }
