@@ -9,3 +9,5 @@ web/public/wasm/*.wasm
 *.a
 .DS_Store
 
+.cache/*
+
