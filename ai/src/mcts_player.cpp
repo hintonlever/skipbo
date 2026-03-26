@@ -117,10 +117,10 @@ static double rollout(GameState state, int perspective, double heuristic_rate,
                       int rollout_depth, int root_my_stock, int root_opp_stock,
                       std::mt19937& rng) {
     std::uniform_real_distribution<double> coin(0.0, 1.0);
-    int max_moves = rollout_depth * 2; // per-player depth * 2 players
+    int max_turns = rollout_depth * 2; // per-player turns * 2 players
     int consecutive_passes = 0;
-    int moves_made = 0;
-    while (!state.game_over && moves_made < max_moves && consecutive_passes < 4) {
+    int turns = 0;
+    while (!state.game_over && turns < max_turns && consecutive_passes < 4) {
         const auto& player = state.players[state.current_player];
         // Quick check: any hand cards or playable stock/discard?
         if (player.hand_count == 0 && player.stock_empty()) {
@@ -141,7 +141,7 @@ static double rollout(GameState state, int perspective, double heuristic_rate,
             ? pick_heuristic_move(state, rng)
             : pick_random_move(state, rng);
         Game::apply_move_to_state(state, m);
-        moves_made++;
+        if (m.is_discard()) turns++;
     }
 
     // Net stock card progress from root state: +1 per card I cleared, -1 per card opponent cleared.
@@ -157,8 +157,8 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
 
     if (legal_moves.empty()) return {};
 
-    // Accumulate visit counts across determinizations
-    std::map<size_t, double> move_scores;  // move index -> aggregated score
+    // Accumulate raw total_reward and visits across all determinizations
+    std::map<size_t, double> move_total_reward;
     std::map<size_t, int> move_total_visits;
 
     for (int d = 0; d < config_.num_determinizations; ++d) {
@@ -175,15 +175,17 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
             MCTSNode* node = &root;
             int depth = 0;
 
-            // SELECT (limited by max_tree_depth)
-            while (node->fully_expanded() && !node->is_leaf() && depth < config_.max_tree_depth) {
+            // SELECT — depth counts complete turns (discards); limit is per player,
+            // so max_tree_depth=3 means 3 turns each = 6 discards total.
+            int max_discards = config_.max_tree_depth * 2;
+            while (node->fully_expanded() && !node->is_leaf() && depth < max_discards) {
                 node = node->select_child();
                 Game::apply_move_to_state(sim_state, node->move);
-                depth++;
+                if (node->move.is_discard()) depth++;
             }
 
             // EXPAND
-            if (!node->fully_expanded() && !sim_state.game_over && depth < config_.max_tree_depth) {
+            if (!node->fully_expanded() && !sim_state.game_over && depth < max_discards) {
                 std::uniform_int_distribution<int> dist(
                     0, node->untried_moves.size() - 1);
                 int idx = dist(rng_);
@@ -206,13 +208,11 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
             }
         }
 
-        // Aggregate average reward from this determinization
+        // Accumulate raw reward and visits from this determinization
         for (const auto& child : root.children) {
             for (size_t i = 0; i < legal_moves.size(); ++i) {
                 if (legal_moves[i] == child->move) {
-                    if (child->visits > 0) {
-                        move_scores[i] += child->total_reward / child->visits;
-                    }
+                    move_total_reward[i] += child->total_reward;
                     move_total_visits[i] += child->visits;
                     break;
                 }
@@ -220,18 +220,12 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
         }
     }
 
-    // Build results — average reward across determinizations
+    // Build results — total_reward / total_visits across all determinizations
     std::vector<MoveAnalysis> results;
     results.reserve(legal_moves.size());
     for (size_t i = 0; i < legal_moves.size(); ++i) {
-        int dets_with_visits = 0;
-        // Count how many determinizations actually visited this move
-        // (move_scores[i] is sum of per-det average rewards)
-        double score = 0.0;
-        if (move_total_visits.count(i) && move_total_visits[i] > 0) {
-            score = move_scores.count(i) ? move_scores[i] / config_.num_determinizations : 0.0;
-        }
         int visits = move_total_visits.count(i) ? move_total_visits[i] : 0;
+        double score = visits > 0 ? move_total_reward[i] / visits : 0.0;
         results.push_back({legal_moves[i], score, visits});
     }
     return results;
@@ -290,15 +284,17 @@ std::vector<int> MCTSPlayer::analyze_tree(
         MCTSNode* node = &root;
         int depth = 0;
 
-        // SELECT
-        while (node->fully_expanded() && !node->is_leaf() && depth < config_.max_tree_depth) {
+        // SELECT — depth counts complete turns (discards); limit is per player,
+        // so max_tree_depth=3 means 3 turns each = 6 discards total.
+        int max_discards = config_.max_tree_depth * 2;
+        while (node->fully_expanded() && !node->is_leaf() && depth < max_discards) {
             node = node->select_child();
             Game::apply_move_to_state(sim_state, node->move);
-            depth++;
+            if (node->move.is_discard()) depth++;
         }
 
         // EXPAND
-        if (!node->fully_expanded() && !sim_state.game_over && depth < config_.max_tree_depth) {
+        if (!node->fully_expanded() && !sim_state.game_over && depth < max_discards) {
             std::uniform_int_distribution<int> dist(0, node->untried_moves.size() - 1);
             int idx = dist(rng_);
             Move expand_move = node->untried_moves[idx];

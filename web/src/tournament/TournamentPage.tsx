@@ -12,7 +12,7 @@ interface AISpec {
   treeDepth: number;
 }
 
-const AI_PARTICIPANTS: AISpec[] = [
+const DEFAULT_PARTICIPANTS: AISpec[] = [
   { name: 'Random',      type: 0, iters: 0,     dets: 0,  heuristicPct: 0,  rolloutDepth: 0,  treeDepth: 0 },
   { name: 'Heuristic',   type: 1, iters: 0,     dets: 0,  heuristicPct: 0,  rolloutDepth: 0,  treeDepth: 0 },
   { name: 'MCTS Easy',   type: 2, iters: 50,    dets: 3,  heuristicPct: 50, rolloutDepth: 10, treeDepth: 5 },
@@ -54,8 +54,9 @@ function chipColor(type: number): string {
 }
 
 export function TournamentPage() {
+  const [participants, setParticipants] = useState<AISpec[]>(() => DEFAULT_PARTICIPANTS.map(p => ({ ...p })));
   const [matchesPerPairing, setMatchesPerPairing] = useState(20);
-  const [selected, setSelected] = useState<boolean[]>(() => AI_PARTICIPANTS.map((_, i) => i <= 2));
+  const [selected, setSelected] = useState<boolean[]>(() => DEFAULT_PARTICIPANTS.map((_, i) => i <= 2));
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState('');
   const [completed, setCompleted] = useState(0);
@@ -65,9 +66,13 @@ export function TournamentPage() {
   const workersRef = useRef<Worker[]>([]);
   const cancelRef = useRef(false);
 
+  const updateParticipant = (idx: number, field: keyof AISpec, value: number) => {
+    setParticipants(prev => prev.map((p, i) => i === idx ? { ...p, [field]: value } : p));
+  };
+
   // Selected indices
   const selectedIndices = selected.map((s, i) => s ? i : -1).filter(i => i >= 0);
-  const selectedAIs = selectedIndices.map(i => AI_PARTICIPANTS[i]);
+  const selectedAIs = selectedIndices.map(i => participants[i]);
 
   const toggleSelected = (idx: number) => {
     setSelected(prev => prev.map((s, i) => i === idx ? !s : s));
@@ -88,11 +93,11 @@ export function TournamentPage() {
     setIsRunning(true);
     cancelRef.current = false;
 
-    const n = AI_PARTICIPANTS.length;
+    const n = participants.length;
     const pairResults: PairResult[][] = Array.from({ length: n }, () =>
       Array.from({ length: n }, () => ({ p0Wins: 0, p1Wins: 0, played: 0 }))
     );
-    const ratings: EloRating[] = AI_PARTICIPANTS.map(() => ({ rating: 1500, games: 0 }));
+    const ratings: EloRating[] = participants.map(() => ({ rating: 1500, games: 0 }));
 
     // Build all jobs
     const pairings: [number, number][] = [];
@@ -107,8 +112,8 @@ export function TournamentPage() {
     let jobIndex = 0;
 
     for (const [i, j] of pairings) {
-      const a = AI_PARTICIPANTS[i];
-      const b = AI_PARTICIPANTS[j];
+      const a = participants[i];
+      const b = participants[j];
       for (let m = 0; m < matchesPerPairing; m++) {
         const p0 = m % 2 === 0 ? a : b;
         const p1 = m % 2 === 0 ? b : a;
@@ -214,7 +219,7 @@ export function TournamentPage() {
     }
 
     workersRef.current = workers;
-  }, [matchesPerPairing, selected]);
+  }, [matchesPerPairing, selected, participants]);
 
   const cancel = useCallback(() => {
     cancelRef.current = true;
@@ -234,25 +239,79 @@ export function TournamentPage() {
       {/* Participant selection */}
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#374151' }}>Select Participants</h2>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {AI_PARTICIPANTS.map((ai, idx) => {
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {participants.map((ai, idx) => {
             const active = selected[idx];
+            const isMCTS = ai.type === 2;
+            const inputStyle = {
+              width: 60, padding: '2px 4px', borderRadius: 4,
+              border: '1px solid #d1d5db', fontSize: '12px',
+            };
+            const labelStyle = { color: '#6b7280', fontSize: '11px' as const };
             return (
-              <button
-                key={ai.name}
-                onClick={() => !isRunning && toggleSelected(idx)}
-                disabled={isRunning}
-                style={{
-                  padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 500,
-                  cursor: isRunning ? 'default' : 'pointer',
-                  border: active ? `2px solid ${chipColor(ai.type)}` : '2px solid #d1d5db',
-                  backgroundColor: active ? chipBg(ai.type) : '#fff',
-                  color: active ? chipColor(ai.type) : '#9ca3af',
-                  opacity: isRunning ? 0.7 : 1,
-                }}
-              >
-                {ai.name}
-              </button>
+              <div key={idx} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '6px 12px', borderRadius: 8,
+                border: active ? `2px solid ${chipColor(ai.type)}` : '2px solid #e5e7eb',
+                backgroundColor: active ? chipBg(ai.type) : '#fafafa',
+                opacity: isRunning ? 0.7 : 1,
+              }}>
+                <button
+                  onClick={() => !isRunning && toggleSelected(idx)}
+                  disabled={isRunning}
+                  style={{
+                    padding: '4px 12px', borderRadius: 16, fontSize: 13, fontWeight: 600,
+                    cursor: isRunning ? 'default' : 'pointer',
+                    border: 'none',
+                    backgroundColor: active ? chipColor(ai.type) : '#d1d5db',
+                    color: '#fff', minWidth: 100,
+                  }}
+                >
+                  {ai.name}
+                </button>
+                {isMCTS && (
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={labelStyle}>Iters</span>
+                      <input type="number" min={10} max={50000} step={10}
+                        value={ai.iters} disabled={isRunning}
+                        onChange={e => updateParticipant(idx, 'iters', Number(e.target.value))}
+                        style={inputStyle} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={labelStyle}>Dets</span>
+                      <input type="number" min={1} max={100}
+                        value={ai.dets} disabled={isRunning}
+                        onChange={e => updateParticipant(idx, 'dets', Number(e.target.value))}
+                        style={inputStyle} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={labelStyle}>Heur%</span>
+                      <input type="number" min={0} max={100} step={10}
+                        value={ai.heuristicPct} disabled={isRunning}
+                        onChange={e => updateParticipant(idx, 'heuristicPct', Number(e.target.value))}
+                        style={inputStyle} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={labelStyle}>Tree</span>
+                      <input type="number" min={1} max={20}
+                        value={ai.treeDepth} disabled={isRunning}
+                        onChange={e => updateParticipant(idx, 'treeDepth', Number(e.target.value))}
+                        style={inputStyle} />
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={labelStyle}>Rollout</span>
+                      <input type="number" min={1} max={50}
+                        value={ai.rolloutDepth} disabled={isRunning}
+                        onChange={e => updateParticipant(idx, 'rolloutDepth', Number(e.target.value))}
+                        style={inputStyle} />
+                    </label>
+                    <span style={{ fontSize: 11, color: '#9ca3af' }}>
+                      {(ai.iters * ai.dets).toLocaleString()} sims/move
+                    </span>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
@@ -337,7 +396,7 @@ export function TournamentPage() {
             </thead>
             <tbody>
               {[...elos]
-                .map((e, i) => ({ ...e, name: AI_PARTICIPANTS[i].name, idx: i, type: AI_PARTICIPANTS[i].type }))
+                .map((e, i) => ({ ...e, name: participants[i].name, idx: i, type: participants[i].type }))
                 .filter(e => selectedIndices.includes(e.idx))
                 .sort((a, b) => b.rating - a.rating)
                 .map((e, rank) => (
@@ -388,7 +447,7 @@ export function TournamentPage() {
                       padding: '6px 10px', fontWeight: 600, whiteSpace: 'nowrap',
                       borderBottom: '1px solid #f3f4f6',
                     }}>
-                      {AI_PARTICIPANTS[i].name}
+                      {participants[i].name}
                     </td>
                     {selectedIndices.map(j => {
                       if (i === j) {
