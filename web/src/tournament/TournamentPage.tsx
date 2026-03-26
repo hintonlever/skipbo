@@ -1,10 +1,10 @@
-import { useState, useCallback, useRef } from 'react';
-import { initEngine, vectorToArray, type SkipBoModule } from '../wasm/engine';
+import { useState, useCallback, useRef, useEffect } from 'react';
+import type { MatchJob } from './matchWorker';
 
 // AI type codes matching C++ enum: 0=random, 1=heuristic, 2=mcts
 interface AISpec {
   name: string;
-  type: number; // 0=random, 1=heuristic, 2=mcts
+  type: number;
   iters: number;
   dets: number;
   heuristicPct: number;
@@ -44,94 +44,184 @@ function eloUpdate(ratings: EloRating[], winner: number, loser: number) {
   ratings[loser].games++;
 }
 
+const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 8);
+
+function chipBg(type: number): string {
+  return type === 0 ? '#fee2e2' : type === 1 ? '#dbeafe' : '#dcfce7';
+}
+function chipColor(type: number): string {
+  return type === 0 ? '#991b1b' : type === 1 ? '#1e40af' : '#166534';
+}
+
 export function TournamentPage() {
   const [matchesPerPairing, setMatchesPerPairing] = useState(20);
+  const [selected, setSelected] = useState<boolean[]>(() => AI_PARTICIPANTS.map((_, i) => i <= 2));
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState('');
+  const [completed, setCompleted] = useState(0);
+  const [totalMatches, setTotalMatches] = useState(0);
   const [results, setResults] = useState<PairResult[][] | null>(null);
   const [elos, setElos] = useState<EloRating[] | null>(null);
+  const workersRef = useRef<Worker[]>([]);
   const cancelRef = useRef(false);
 
-  const runTournament = useCallback(async () => {
+  // Selected indices
+  const selectedIndices = selected.map((s, i) => s ? i : -1).filter(i => i >= 0);
+  const selectedAIs = selectedIndices.map(i => AI_PARTICIPANTS[i]);
+
+  const toggleSelected = (idx: number) => {
+    setSelected(prev => prev.map((s, i) => i === idx ? !s : s));
+  };
+
+  // Cleanup workers on unmount
+  useEffect(() => {
+    return () => {
+      workersRef.current.forEach(w => w.terminate());
+      workersRef.current = [];
+    };
+  }, []);
+
+  const runTournament = useCallback(() => {
+    const indices = selected.map((s, i) => s ? i : -1).filter(i => i >= 0);
+    if (indices.length < 2) return;
+
     setIsRunning(true);
     cancelRef.current = false;
 
-    const module: SkipBoModule = await initEngine();
     const n = AI_PARTICIPANTS.length;
     const pairResults: PairResult[][] = Array.from({ length: n }, () =>
       Array.from({ length: n }, () => ({ p0Wins: 0, p1Wins: 0, played: 0 }))
     );
     const ratings: EloRating[] = AI_PARTICIPANTS.map(() => ({ rating: 1500, games: 0 }));
 
-    // Generate all pairings
+    // Build all jobs
     const pairings: [number, number][] = [];
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        pairings.push([i, j]);
+    for (let ii = 0; ii < indices.length; ii++) {
+      for (let jj = ii + 1; jj < indices.length; jj++) {
+        pairings.push([indices[ii], indices[jj]]);
       }
     }
 
-    const totalMatches = pairings.length * matchesPerPairing;
-    let completed = 0;
+    const jobs: (MatchJob & { aiI: number; aiJ: number; p0Idx: number; p1Idx: number })[] = [];
     const baseSeed = Math.floor(Math.random() * 1000000);
+    let jobIndex = 0;
 
     for (const [i, j] of pairings) {
       const a = AI_PARTICIPANTS[i];
       const b = AI_PARTICIPANTS[j];
-
       for (let m = 0; m < matchesPerPairing; m++) {
-        if (cancelRef.current) break;
-
-        // Alternate who goes first
         const p0 = m % 2 === 0 ? a : b;
         const p1 = m % 2 === 0 ? b : a;
         const p0Idx = m % 2 === 0 ? i : j;
         const p1Idx = m % 2 === 0 ? j : i;
-        const seed = baseSeed + completed;
-
-        // Run match via WASM
-        const result = vectorToArray(module.runMatch(
-          p0.type, p0.iters, p0.dets, p0.heuristicPct, p0.rolloutDepth, p0.treeDepth,
-          p1.type, p1.iters, p1.dets, p1.heuristicPct, p1.rolloutDepth, p1.treeDepth,
-          seed
-        ));
-
-        const winner = result[0]; // 0 or 1
-        const winnerIdx = winner === 0 ? p0Idx : p1Idx;
-        const loserIdx = winner === 0 ? p1Idx : p0Idx;
-
-        // Update pair results (always stored as [i][j] where i < j)
-        if (winnerIdx === i) {
-          pairResults[i][j].p0Wins++;
-        } else {
-          pairResults[i][j].p1Wins++;
-        }
-        pairResults[i][j].played++;
-
-        // Update ELO
-        eloUpdate(ratings, winnerIdx, loserIdx);
-
-        completed++;
-
-        // Yield to UI every match
-        if (completed % 1 === 0) {
-          setProgress(`${completed} / ${totalMatches} matches (${a.name} vs ${b.name})`);
-          setResults(pairResults.map(row => row.map(r => ({ ...r }))));
-          setElos(ratings.map(r => ({ ...r })));
-          await new Promise(r => setTimeout(r, 0));
-        }
+        jobs.push({
+          jobIndex,
+          p0Type: p0.type, p0Iters: p0.iters, p0Dets: p0.dets, p0Heuristic: p0.heuristicPct, p0Rollout: p0.rolloutDepth, p0Tree: p0.treeDepth,
+          p1Type: p1.type, p1Iters: p1.iters, p1Dets: p1.dets, p1Heuristic: p1.heuristicPct, p1Rollout: p1.rolloutDepth, p1Tree: p1.treeDepth,
+          seed: baseSeed + jobIndex,
+          aiI: i, aiJ: j, p0Idx, p1Idx,
+        });
+        jobIndex++;
       }
-      if (cancelRef.current) break;
     }
 
-    setResults(pairResults);
-    setElos(ratings.map(r => ({ ...r })));
-    setProgress(cancelRef.current ? 'Cancelled' : `Done! ${completed} matches completed.`);
-    setIsRunning(false);
-  }, [matchesPerPairing]);
+    const total = jobs.length;
+    setTotalMatches(total);
+    setCompleted(0);
+    setResults(null);
+    setElos(null);
+
+    // Partition jobs across workers (round-robin)
+    const workerJobs: typeof jobs[] = Array.from({ length: NUM_WORKERS }, () => []);
+    jobs.forEach((job, idx) => workerJobs[idx % NUM_WORKERS].push(job));
+
+    // Map jobIndex -> metadata for ELO/results updates
+    const jobMeta = new Map(jobs.map(j => [j.jobIndex, { aiI: j.aiI, aiJ: j.aiJ, p0Idx: j.p0Idx, p1Idx: j.p1Idx }]));
+
+    let doneCount = 0;
+    let updateQueued = false;
+
+    function flushUpdate() {
+      updateQueued = false;
+      setCompleted(doneCount);
+      setResults(pairResults.map(row => row.map(r => ({ ...r }))));
+      setElos(ratings.map(r => ({ ...r })));
+      setProgress(`${doneCount} / ${total} matches`);
+
+      if (doneCount >= total || cancelRef.current) {
+        setIsRunning(false);
+        setProgress(cancelRef.current ? 'Cancelled' : `Done! ${doneCount} matches completed.`);
+        workersRef.current.forEach(w => w.terminate());
+        workersRef.current = [];
+      }
+    }
+
+    // Spawn workers
+    const workers: Worker[] = [];
+    for (let w = 0; w < NUM_WORKERS; w++) {
+      if (workerJobs[w].length === 0) continue;
+
+      const worker = new Worker(
+        new URL('./matchWorker.ts', import.meta.url),
+        { type: 'module' }
+      );
+
+      worker.onmessage = (e: MessageEvent) => {
+        if (cancelRef.current) return;
+        if (e.data.type === 'error') {
+          console.error('Worker error:', e.data.message);
+          setProgress(`Error: ${e.data.message}`);
+          setIsRunning(false);
+          workersRef.current.forEach(w => w.terminate());
+          workersRef.current = [];
+          return;
+        }
+        if (e.data.type === 'result') {
+          const { jobIndex: ji, winner } = e.data;
+          const meta = jobMeta.get(ji);
+          if (!meta) return;
+
+          const { aiI, aiJ, p0Idx, p1Idx } = meta;
+          const winnerIdx = winner === 0 ? p0Idx : p1Idx;
+          const loserIdx = winner === 0 ? p1Idx : p0Idx;
+
+          if (winnerIdx === aiI) {
+            pairResults[aiI][aiJ].p0Wins++;
+          } else {
+            pairResults[aiI][aiJ].p1Wins++;
+          }
+          pairResults[aiI][aiJ].played++;
+          eloUpdate(ratings, winnerIdx, loserIdx);
+
+          doneCount++;
+          if (!updateQueued) {
+            updateQueued = true;
+            setTimeout(flushUpdate, 100);
+          }
+        }
+      };
+
+      worker.onerror = (e) => {
+        console.error('Worker crashed:', e);
+        setProgress(`Worker error: ${e.message}`);
+        setIsRunning(false);
+        workersRef.current.forEach(w => w.terminate());
+        workersRef.current = [];
+      };
+
+      worker.postMessage({ type: 'run', jobs: workerJobs[w].map(({ aiI, aiJ, p0Idx, p1Idx, ...job }) => job) });
+      workers.push(worker);
+    }
+
+    workersRef.current = workers;
+  }, [matchesPerPairing, selected]);
 
   const cancel = useCallback(() => {
     cancelRef.current = true;
+    workersRef.current.forEach(w => w.terminate());
+    workersRef.current = [];
+    setIsRunning(false);
+    setProgress('Cancelled');
   }, []);
 
   return (
@@ -139,9 +229,36 @@ export function TournamentPage() {
       padding: 32, maxWidth: 900, margin: '0 auto',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-        <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>AI Tournament</h1>
-        <a href="#" style={{ fontSize: 13, color: '#6366f1' }}>Back to Game</a>
+      <h1 style={{ margin: '0 0 24px', fontSize: 24, fontWeight: 700 }}>AI Tournament</h1>
+
+      {/* Participant selection */}
+      <div style={{ marginBottom: 20 }}>
+        <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#374151' }}>Select Participants</h2>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {AI_PARTICIPANTS.map((ai, idx) => {
+            const active = selected[idx];
+            return (
+              <button
+                key={ai.name}
+                onClick={() => !isRunning && toggleSelected(idx)}
+                disabled={isRunning}
+                style={{
+                  padding: '6px 14px', borderRadius: 20, fontSize: 13, fontWeight: 500,
+                  cursor: isRunning ? 'default' : 'pointer',
+                  border: active ? `2px solid ${chipColor(ai.type)}` : '2px solid #d1d5db',
+                  backgroundColor: active ? chipBg(ai.type) : '#fff',
+                  color: active ? chipColor(ai.type) : '#9ca3af',
+                  opacity: isRunning ? 0.7 : 1,
+                }}
+              >
+                {ai.name}
+              </button>
+            );
+          })}
+        </div>
+        {selectedIndices.length < 2 && (
+          <p style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>Select at least 2 participants.</p>
+        )}
       </div>
 
       {/* Controls */}
@@ -152,26 +269,26 @@ export function TournamentPage() {
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
           Matches per pairing:
           <input
-            type="number"
-            min={2}
-            max={500}
-            step={2}
+            type="number" min={2} max={500} step={2}
             value={matchesPerPairing}
             onChange={e => setMatchesPerPairing(Number(e.target.value))}
             disabled={isRunning}
-            style={{
-              width: 70, padding: '4px 8px', borderRadius: 4,
-              border: '1px solid #d1d5db', fontSize: 14,
-            }}
+            style={{ width: 70, padding: '4px 8px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: 14 }}
           />
         </label>
+        <span style={{ fontSize: 12, color: '#9ca3af' }}>
+          {NUM_WORKERS} workers
+        </span>
         {!isRunning ? (
           <button
             onClick={runTournament}
+            disabled={selectedIndices.length < 2}
             style={{
-              padding: '6px 20px', borderRadius: 6, cursor: 'pointer',
-              border: 'none', backgroundColor: '#6366f1', color: '#fff',
-              fontSize: 14, fontWeight: 600,
+              padding: '6px 20px', borderRadius: 6,
+              cursor: selectedIndices.length < 2 ? 'default' : 'pointer',
+              border: 'none',
+              backgroundColor: selectedIndices.length < 2 ? '#d1d5db' : '#6366f1',
+              color: '#fff', fontSize: 14, fontWeight: 600,
             }}
           >
             Run Tournament
@@ -181,8 +298,7 @@ export function TournamentPage() {
             onClick={cancel}
             style={{
               padding: '6px 20px', borderRadius: 6, cursor: 'pointer',
-              border: 'none', backgroundColor: '#ef4444', color: '#fff',
-              fontSize: 14, fontWeight: 600,
+              border: 'none', backgroundColor: '#ef4444', color: '#fff', fontSize: 14, fontWeight: 600,
             }}
           >
             Cancel
@@ -193,22 +309,18 @@ export function TournamentPage() {
         )}
       </div>
 
-      {/* Participants */}
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>Participants</h2>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {AI_PARTICIPANTS.map(ai => (
-            <span key={ai.name} style={{
-              padding: '4px 12px', borderRadius: 16, fontSize: 13,
-              backgroundColor: ai.type === 0 ? '#fee2e2' : ai.type === 1 ? '#dbeafe' : '#dcfce7',
-              color: ai.type === 0 ? '#991b1b' : ai.type === 1 ? '#1e40af' : '#166534',
-              fontWeight: 500,
-            }}>
-              {ai.name}
-            </span>
-          ))}
+      {/* Progress bar */}
+      {isRunning && totalMatches > 0 && (
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ height: 6, backgroundColor: '#e5e7eb', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{
+              width: `${(completed / totalMatches) * 100}%`,
+              height: '100%', backgroundColor: '#6366f1', borderRadius: 3,
+              transition: 'width 0.2s',
+            }} />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* ELO Rankings */}
       {elos && (
@@ -225,12 +337,20 @@ export function TournamentPage() {
             </thead>
             <tbody>
               {[...elos]
-                .map((e, i) => ({ ...e, name: AI_PARTICIPANTS[i].name, idx: i }))
+                .map((e, i) => ({ ...e, name: AI_PARTICIPANTS[i].name, idx: i, type: AI_PARTICIPANTS[i].type }))
+                .filter(e => selectedIndices.includes(e.idx))
                 .sort((a, b) => b.rating - a.rating)
                 .map((e, rank) => (
                   <tr key={e.idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
                     <td style={{ padding: '6px 12px', color: '#9ca3af' }}>{rank + 1}</td>
-                    <td style={{ padding: '6px 12px', fontWeight: 500 }}>{e.name}</td>
+                    <td style={{ padding: '6px 12px', fontWeight: 500 }}>
+                      <span style={{
+                        padding: '2px 8px', borderRadius: 10, fontSize: 12,
+                        backgroundColor: chipBg(e.type), color: chipColor(e.type),
+                      }}>
+                        {e.name}
+                      </span>
+                    </td>
                     <td style={{ padding: '6px 12px', textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
                       {Math.round(e.rating)}
                     </td>
@@ -251,7 +371,7 @@ export function TournamentPage() {
               <thead>
                 <tr>
                   <th style={{ padding: '6px 10px', borderBottom: '2px solid #e5e7eb' }}></th>
-                  {AI_PARTICIPANTS.map(ai => (
+                  {selectedAIs.map(ai => (
                     <th key={ai.name} style={{
                       padding: '6px 10px', borderBottom: '2px solid #e5e7eb',
                       textAlign: 'center', whiteSpace: 'nowrap', fontWeight: 600,
@@ -262,27 +382,23 @@ export function TournamentPage() {
                 </tr>
               </thead>
               <tbody>
-                {AI_PARTICIPANTS.map((rowAi, i) => (
-                  <tr key={rowAi.name}>
+                {selectedIndices.map(i => (
+                  <tr key={i}>
                     <td style={{
                       padding: '6px 10px', fontWeight: 600, whiteSpace: 'nowrap',
                       borderBottom: '1px solid #f3f4f6',
                     }}>
-                      {rowAi.name}
+                      {AI_PARTICIPANTS[i].name}
                     </td>
-                    {AI_PARTICIPANTS.map((_, j) => {
+                    {selectedIndices.map(j => {
                       if (i === j) {
                         return (
                           <td key={j} style={{
                             padding: '6px 10px', textAlign: 'center',
-                            backgroundColor: '#f3f4f6', borderBottom: '1px solid #f3f4f6',
-                            color: '#9ca3af',
-                          }}>
-                            -
-                          </td>
+                            backgroundColor: '#f3f4f6', borderBottom: '1px solid #f3f4f6', color: '#9ca3af',
+                          }}>-</td>
                         );
                       }
-                      // results[min][max] stores { p0Wins (for min idx), p1Wins (for max idx) }
                       const mi = Math.min(i, j);
                       const ma = Math.max(i, j);
                       const pair = results[mi][ma];
@@ -291,12 +407,9 @@ export function TournamentPage() {
                           <td key={j} style={{
                             padding: '6px 10px', textAlign: 'center',
                             borderBottom: '1px solid #f3f4f6', color: '#d1d5db',
-                          }}>
-                            ...
-                          </td>
+                          }}>...</td>
                         );
                       }
-                      // Win rate of row player (i) against column player (j)
                       const iWins = i === mi ? pair.p0Wins : pair.p1Wins;
                       const winRate = iWins / pair.played;
                       const pct = (winRate * 100).toFixed(0);
@@ -306,8 +419,7 @@ export function TournamentPage() {
                         <td key={j} style={{
                           padding: '6px 10px', textAlign: 'center',
                           backgroundColor: bg, color, fontWeight: 600,
-                          borderBottom: '1px solid #f3f4f6',
-                          fontVariantNumeric: 'tabular-nums',
+                          borderBottom: '1px solid #f3f4f6', fontVariantNumeric: 'tabular-nums',
                         }}>
                           {pct}%
                           <span style={{ fontSize: 11, fontWeight: 400, color: '#9ca3af', marginLeft: 4 }}>
