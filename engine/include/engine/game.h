@@ -31,9 +31,11 @@ public:
     // Pass the current player's turn (used when no legal moves available)
     void pass_turn();
 
-    // For MCTS: apply a move to an arbitrary state (no drawing, no RNG needed
-    // except for building pile completion recycling which we skip in simulation)
-    static bool apply_move_to_state(GameState& state, const Move& move);
+    // For MCTS: apply a move to an arbitrary state.
+    // If rng is provided, shuffles draw pile on building pile completion.
+    // If rng is null, recycled cards are appended without shuffling.
+    static bool apply_move_to_state(GameState& state, const Move& move,
+                                     std::mt19937* rng = nullptr);
 
 private:
     GameState state_;

@@ -10,9 +10,9 @@ TEST_CASE("Game setup creates valid initial state", "[game]") {
     game.setup();
     const auto& state = game.state();
 
-    // Each player should have 30 stock cards
-    REQUIRE(state.players[0].stock_size() == 30);
-    REQUIRE(state.players[1].stock_size() == 30);
+    // Each player should have STOCK_PILE_SIZE stock cards
+    REQUIRE(state.players[0].stock_size() == STOCK_PILE_SIZE);
+    REQUIRE(state.players[1].stock_size() == STOCK_PILE_SIZE);
 
     // Current player should have 5 hand cards
     REQUIRE(state.players[0].hand_count == 5);

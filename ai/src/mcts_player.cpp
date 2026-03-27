@@ -96,16 +96,18 @@ static Move pick_heuristic_move(const GameState& state, std::mt19937& rng) {
 static Move pick_random_move(const GameState& state, std::mt19937& rng) {
     const auto& player = state.players[state.current_player];
 
-    // Collect build moves + discard moves into a compact list
+    // Collect build moves first — always play builds before discarding
     Move buf[64];
     int n = collect_build_moves(state, buf, 48);
 
-    // Add discard options
-    for (int h = 0; h < player.hand_count && n < 64; ++h) {
-        auto src = static_cast<MoveSource>(static_cast<int>(MoveSource::Hand0) + h);
-        for (int d = 0; d < NUM_DISCARD_PILES && n < 64; ++d) {
-            buf[n++] = {src, static_cast<MoveTarget>(
-                static_cast<int>(MoveTarget::DiscardPile0) + d)};
+    // Only add discard options if no build moves available
+    if (n == 0) {
+        for (int h = 0; h < player.hand_count && n < 64; ++h) {
+            auto src = static_cast<MoveSource>(static_cast<int>(MoveSource::Hand0) + h);
+            for (int d = 0; d < NUM_DISCARD_PILES && n < 64; ++d) {
+                buf[n++] = {src, static_cast<MoveTarget>(
+                    static_cast<int>(MoveTarget::DiscardPile0) + d)};
+            }
         }
     }
     if (n == 0) return {MoveSource::Hand0, MoveTarget::DiscardPile0};
@@ -140,7 +142,7 @@ static double rollout(GameState state, int perspective, double heuristic_rate,
         Move m = (coin(rng) < heuristic_rate)
             ? pick_heuristic_move(state, rng)
             : pick_random_move(state, rng);
-        Game::apply_move_to_state(state, m);
+        Game::apply_move_to_state(state, m, &rng);
         if (m.is_discard()) turns++;
     }
 
@@ -181,7 +183,7 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
             int max_discards = config_.max_tree_depth * 2;
             while (node->fully_expanded() && !node->is_leaf() && depth < max_discards) {
                 node = node->select_child();
-                Game::apply_move_to_state(sim_state, node->move);
+                Game::apply_move_to_state(sim_state, node->move, &rng_);
                 if (node->move.is_discard()) depth++;
             }
 
@@ -192,7 +194,7 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
                     0, node->untried_moves.size() - 1);
                 int idx = dist(rng_);
                 Move expand_move = node->untried_moves[idx];
-                Game::apply_move_to_state(sim_state, expand_move);
+                Game::apply_move_to_state(sim_state, expand_move, &rng_);
                 MoveList next_moves;
                 get_legal_moves(sim_state, next_moves);
                 node = node->add_child(expand_move, next_moves);

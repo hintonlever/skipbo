@@ -173,7 +173,8 @@ static void draw_cards_from_pile(GameState& state, int player_id, int count) {
     }
 }
 
-bool Game::apply_move_to_state(GameState& state, const Move& move) {
+bool Game::apply_move_to_state(GameState& state, const Move& move,
+                                std::mt19937* rng) {
     uint8_t acting_player = state.current_player;
     if (!move_card(state, move)) return false;
 
@@ -190,6 +191,9 @@ bool Game::apply_move_to_state(GameState& state, const Move& move) {
         if (state.building_pile_count[bi] >= CARD_MAX) {
             for (Card c = CARD_MIN; c <= CARD_MAX; ++c) {
                 state.draw_pile.push_back(c);
+            }
+            if (rng) {
+                std::shuffle(state.draw_pile.begin(), state.draw_pile.end(), *rng);
             }
             state.building_pile_count[bi] = 0;
         }
