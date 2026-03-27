@@ -249,10 +249,12 @@ inline std::vector<int> wasm_run_match(
         }
     };
 
+    // Use distinct seed domains to avoid correlation between game RNG and AI RNG.
+    // Game seed and AI seeds must not overlap.
     auto p0 = make_player(p0Type, p0Iters, p0Dets, p0Heuristic, p0Rollout, p0Tree,
-                           static_cast<uint64_t>(seed));
-    auto p1 = make_player(p1Type, p1Iters, p1Dets, p1Heuristic, p1Rollout, p1Tree,
                            static_cast<uint64_t>(seed + 1000));
+    auto p1 = make_player(p1Type, p1Iters, p1Dets, p1Heuristic, p1Rollout, p1Tree,
+                           static_cast<uint64_t>(seed + 2000));
 
     Game game(static_cast<uint64_t>(seed));
     game.setup();
@@ -281,7 +283,9 @@ inline std::vector<int> wasm_run_match(
     if (!game.is_game_over()) {
         int s0 = game.state().players[0].stock_size();
         int s1 = game.state().players[1].stock_size();
-        winner = (s0 <= s1) ? 0 : 1;
+        if (s0 < s1) winner = 0;
+        else if (s1 < s0) winner = 1;
+        else winner = seed % 2;  // true tie: coin flip based on seed
     }
 
     int s0 = game.state().players[0].stock_size();

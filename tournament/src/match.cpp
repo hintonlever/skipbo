@@ -41,7 +41,9 @@ MatchResult run_match(Player& p0, Player& p1, uint64_t seed) {
         // Stalemate — winner is whoever has fewer stock pile cards
         int s0 = game.state().players[0].stock_size();
         int s1 = game.state().players[1].stock_size();
-        winner = (s0 <= s1) ? 0 : 1;
+        if (s0 < s1) winner = 0;
+        else if (s1 < s0) winner = 1;
+        else winner = static_cast<int>(seed % 2);  // true tie: coin flip
     }
 
     return {winner, turns, ms, seed};
