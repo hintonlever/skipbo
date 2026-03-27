@@ -33,6 +33,6 @@ EMSCRIPTEN_BINDINGS(skipbo) {
         .function("passTurn", &WasmGameController::passTurn)
         // Analysis
         .function("analyzeMoves", &WasmGameController::analyzeMoves)
-        .function("analyzeTree", &WasmGameController::analyzeTree)
+        .function("analyzeChains", &WasmGameController::analyzeChains)
         ;
 }

@@ -72,6 +72,33 @@ export function parseAnalysis(flat: number[]): MoveWithAnalysis[] {
   return result;
 }
 
+// Chain analysis: a complete turn action (builds + discard) with MCTS evaluation
+export interface ChainAnalysis {
+  moves: Move[];      // ordered sequence: build moves then discard
+  visits: number;
+  reward: number;     // avg reward from root player's perspective
+}
+
+// Parse flat chain array from WASM: [numChains, numMoves1, src, tgt, ..., visits, reward*1000, ...]
+export function parseChains(flat: number[]): ChainAnalysis[] {
+  if (flat.length === 0) return [];
+  const numChains = flat[0];
+  const result: ChainAnalysis[] = [];
+  let idx = 1;
+  for (let c = 0; c < numChains && idx < flat.length; c++) {
+    const numMoves = flat[idx++];
+    const moves: Move[] = [];
+    for (let m = 0; m < numMoves && idx + 1 < flat.length; m++) {
+      moves.push({ source: flat[idx] as MoveSource, target: flat[idx + 1] as MoveTarget });
+      idx += 2;
+    }
+    const visits = flat[idx++];
+    const reward = flat[idx++] / 1000;
+    result.push({ moves, visits, reward });
+  }
+  return result;
+}
+
 // MCTS tree node for visualization
 export interface TreeNode {
   index: number;

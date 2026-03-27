@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { initEngine, vectorToArray, type GameController } from '../wasm/engine';
 import {
-  type GameSnapshot, type MoveWithAnalysis, type TreeNode,
-  MoveSource, MoveTarget, parseMovePairs, parseAnalysis, parseTree, isDiscard
+  type GameSnapshot, type ChainAnalysis,
+  MoveSource, MoveTarget, parseMovePairs, parseChains, isDiscard
 } from '../wasm/types';
 
 function takeSnapshot(ctrl: GameController): GameSnapshot {
@@ -31,16 +31,14 @@ export type AIType = 'mcts' | 'heuristic';
 export interface MCTSConfig {
   iterations: number;
   determinizations: number;
-  heuristicPct: number; // 0-100, rollout heuristic rate
-  treeDepth: number; // max depth of MCTS tree (select/expand)
-  rolloutDepth: number; // moves per player in rollout
+  turnDepth: number; // max turns per player in the tree
 }
 
 export const DIFFICULTY_PRESETS: { label: string; aiType: AIType; config: MCTSConfig }[] = [
-  { label: 'Heuristic', aiType: 'heuristic', config: { iterations: 0, determinizations: 0, heuristicPct: 0, treeDepth: 0, rolloutDepth: 0 } },
-  { label: 'Easy',   aiType: 'mcts', config: { iterations: 50,    determinizations: 3,  heuristicPct: 50, treeDepth: 5, rolloutDepth: 10 } },
-  { label: 'Medium', aiType: 'mcts', config: { iterations: 300,   determinizations: 10, heuristicPct: 50, treeDepth: 5, rolloutDepth: 10 } },
-  { label: 'Hard',   aiType: 'mcts', config: { iterations: 10000, determinizations: 20, heuristicPct: 50, treeDepth: 5, rolloutDepth: 10 } },
+  { label: 'Heuristic', aiType: 'heuristic', config: { iterations: 0, determinizations: 0, turnDepth: 0 } },
+  { label: 'Easy',   aiType: 'mcts', config: { iterations: 50,    determinizations: 3,  turnDepth: 2 } },
+  { label: 'Medium', aiType: 'mcts', config: { iterations: 300,   determinizations: 10, turnDepth: 3 } },
+  { label: 'Hard',   aiType: 'mcts', config: { iterations: 2000,  determinizations: 20, turnDepth: 4 } },
 ];
 
 export interface GameEngine {
@@ -48,11 +46,9 @@ export interface GameEngine {
   isLoading: boolean;
   isAIThinking: boolean;
   isAnalyzing: boolean;
-  isAnalyzingTree: boolean;
   aiType: AIType;
   mctsConfig: MCTSConfig;
-  analysis: MoveWithAnalysis[] | null;
-  treeData: TreeNode | null;
+  chains: ChainAnalysis[] | null;
   showAnalysis: boolean;
   playMove: (source: MoveSource, target: MoveTarget) => void;
   newGame: () => void;
@@ -60,7 +56,6 @@ export interface GameEngine {
   setMctsConfig: (config: MCTSConfig) => void;
   toggleAnalysis: () => void;
   reanalyze: () => void;
-  analyzeTree: () => void;
 }
 
 export function useGameEngine(): GameEngine {
@@ -71,9 +66,7 @@ export function useGameEngine(): GameEngine {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiType, setAIType] = useState<AIType>(DIFFICULTY_PRESETS[2].aiType);
   const [mctsConfig, setMctsConfig] = useState<MCTSConfig>(DIFFICULTY_PRESETS[2].config);
-  const [analysis, setAnalysis] = useState<MoveWithAnalysis[] | null>(null);
-  const [treeData, setTreeData] = useState<TreeNode | null>(null);
-  const [isAnalyzingTree, setIsAnalyzingTree] = useState(false);
+  const [chains, setChains] = useState<ChainAnalysis[] | null>(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const showAnalysisRef = useRef(showAnalysis);
   showAnalysisRef.current = showAnalysis;
@@ -88,34 +81,22 @@ export function useGameEngine(): GameEngine {
 
     setIsAnalyzing(true);
     setTimeout(() => {
-      const cfg = mctsConfigRef.current;
-      const flat = vectorToArray(ctrl.analyzeMoves(cfg.iterations, cfg.determinizations, cfg.heuristicPct, cfg.rolloutDepth, cfg.treeDepth));
-      setAnalysis(parseAnalysis(flat));
+      try {
+        const cfg = mctsConfigRef.current;
+        const flat = vectorToArray(ctrl.analyzeChains(cfg.iterations, cfg.determinizations, cfg.turnDepth));
+        setChains(parseChains(flat));
+      } catch (e) {
+        console.error('analyzeChains failed:', e);
+        setChains([]);
+      }
       setIsAnalyzing(false);
-    }, 30);
-  }, []);
-
-  const runTreeAnalysis = useCallback(() => {
-    const ctrl = ctrlRef.current;
-    if (!ctrl || ctrl.isGameOver() || ctrl.getCurrentPlayer() !== 0) return;
-
-    setIsAnalyzingTree(true);
-    setTimeout(() => {
-      const cfg = mctsConfigRef.current;
-      const flat = vectorToArray(ctrl.analyzeTree(
-        cfg.iterations, cfg.heuristicPct, cfg.rolloutDepth,
-        cfg.treeDepth, 3, 10
-      ));
-      setTreeData(parseTree(flat));
-      setIsAnalyzingTree(false);
     }, 30);
   }, []);
 
   const refreshSnapshot = useCallback((andAnalyze: boolean = false) => {
     if (ctrlRef.current) {
       setSnapshot(takeSnapshot(ctrlRef.current));
-      setAnalysis(null);
-      setTreeData(null);
+      setChains(null);
       if (andAnalyze || showAnalysisRef.current) {
         runAnalysis();
       }
@@ -154,11 +135,15 @@ export function useGameEngine(): GameEngine {
     setIsAIThinking(true);
 
     setTimeout(() => {
-      if (aiTypeRef.current === 'heuristic') {
-        vectorToArray(ctrl.playHeuristicAITurn());
-      } else {
-        const cfg = mctsConfigRef.current;
-        vectorToArray(ctrl.playAITurn(cfg.iterations, cfg.determinizations, cfg.heuristicPct, cfg.rolloutDepth, cfg.treeDepth));
+      try {
+        if (aiTypeRef.current === 'heuristic') {
+          vectorToArray(ctrl.playHeuristicAITurn());
+        } else {
+          const cfg = mctsConfigRef.current;
+          vectorToArray(ctrl.playAITurn(cfg.iterations, cfg.determinizations, cfg.turnDepth));
+        }
+      } catch (e) {
+        console.error('AI turn failed:', e);
       }
       setIsAIThinking(false);
       refreshSnapshot();
@@ -185,7 +170,7 @@ export function useGameEngine(): GameEngine {
       if (next) {
         runAnalysis();
       } else {
-        setAnalysis(null);
+        setChains(null);
       }
       return next;
     });
@@ -196,11 +181,9 @@ export function useGameEngine(): GameEngine {
     isLoading,
     isAIThinking,
     isAnalyzing,
-    isAnalyzingTree,
     aiType,
     mctsConfig,
-    analysis,
-    treeData,
+    chains,
     showAnalysis,
     playMove,
     newGame: startGame,
@@ -208,6 +191,5 @@ export function useGameEngine(): GameEngine {
     setMctsConfig,
     toggleAnalysis,
     reanalyze: runAnalysis,
-    analyzeTree: runTreeAnalysis,
   };
 }

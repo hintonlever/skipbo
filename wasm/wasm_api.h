@@ -114,13 +114,11 @@ public:
 
     // Let the MCTS AI play its turn (player 1). Returns when AI's turn is done.
     // Returns a flat array of moves the AI made: [source0, target0, source1, target1, ...]
-    std::vector<int> playAITurn(int iterations, int determinizations, int heuristicPct, int rolloutDepth, int treeDepth) {
+    std::vector<int> playAITurn(int iterations, int determinizations, int turnDepth) {
         MCTSConfig config;
         config.iterations_per_det = iterations;
         config.num_determinizations = determinizations;
-        config.rollout_heuristic_rate = heuristicPct / 100.0;
-        config.rollout_depth = rolloutDepth;
-        config.max_tree_depth = treeDepth;
+        config.max_turn_depth = turnDepth;
         ai_.set_config(config);
 
         return playAITurnWith(ai_);
@@ -142,15 +140,38 @@ public:
 
     // --- Analysis ---
 
-    // Analyze moves for the current player. Returns flat array:
-    // [source0, target0, winProb0*1000, source1, target1, winProb1*1000, ...]
-    std::vector<int> analyzeMoves(int iterations, int determinizations, int heuristicPct, int rolloutDepth, int treeDepth) {
+    // Analyze chains for the current player. Returns flat array:
+    // [numChains, numMoves1, src, tgt, src, tgt, ..., visits, reward*1000,
+    //             numMoves2, src, tgt, ..., visits, reward*1000, ...]
+    std::vector<int> analyzeChains(int iterations, int determinizations, int turnDepth) {
         MCTSConfig config;
         config.iterations_per_det = iterations;
         config.num_determinizations = determinizations;
-        config.rollout_heuristic_rate = heuristicPct / 100.0;
-        config.rollout_depth = rolloutDepth;
-        config.max_tree_depth = treeDepth;
+        config.max_turn_depth = turnDepth;
+        ai_.set_config(config);
+
+        auto chains = ai_.analyze_chains(game_.state());
+
+        std::vector<int> result;
+        result.push_back(static_cast<int>(chains.size()));
+        for (const auto& ca : chains) {
+            result.push_back(ca.action.num_moves);
+            for (int i = 0; i < ca.action.num_moves; i++) {
+                result.push_back(static_cast<int>(ca.action.moves[i].source));
+                result.push_back(static_cast<int>(ca.action.moves[i].target));
+            }
+            result.push_back(ca.total_visits);
+            result.push_back(static_cast<int>(ca.reward * 1000));
+        }
+        return result;
+    }
+
+    // Legacy: per-move analysis
+    std::vector<int> analyzeMoves(int iterations, int determinizations, int turnDepth) {
+        MCTSConfig config;
+        config.iterations_per_det = iterations;
+        config.num_determinizations = determinizations;
+        config.max_turn_depth = turnDepth;
         ai_.set_config(config);
 
         auto legal = get_legal_moves(game_.state());
@@ -164,23 +185,6 @@ public:
             result.push_back(static_cast<int>(a.win_probability * 1000));
         }
         return result;
-    }
-
-    // Analyze MCTS tree for the current player (single determinization).
-    // Returns flat array: [parentIdx, source, target, visits, avgReward*1000, ...]
-    // Each node is 5 consecutive ints. Root has parentIdx=-1, source=-1, target=-1.
-    std::vector<int> analyzeTree(int iterations, int heuristicPct, int rolloutDepth,
-                                  int treeDepth, int vizMaxDepth, int vizTopN) {
-        MCTSConfig config;
-        config.iterations_per_det = iterations;
-        config.num_determinizations = 1;
-        config.rollout_heuristic_rate = heuristicPct / 100.0;
-        config.rollout_depth = rolloutDepth;
-        config.max_tree_depth = treeDepth;
-        ai_.set_config(config);
-
-        auto legal = get_legal_moves(game_.state());
-        return ai_.analyze_tree(game_.state(), legal, vizMaxDepth, vizTopN);
     }
 
 private:
@@ -240,9 +244,8 @@ inline std::vector<int> wasm_run_match(
                 MCTSConfig cfg;
                 cfg.iterations_per_det = iters;
                 cfg.num_determinizations = dets;
-                cfg.rollout_heuristic_rate = heuristic / 100.0;
-                cfg.rollout_depth = rollout;
-                cfg.max_tree_depth = tree;
+                cfg.max_turn_depth = tree;
+                (void)heuristic; (void)rollout; // legacy params, no longer used
                 return std::make_unique<MCTSPlayer>(s, cfg);
             }
             default: return std::make_unique<RandomPlayer>(s);

@@ -31,7 +31,7 @@ function App() {
           Game
         </button>
         <button style={tabStyle(page === 'tree')} onClick={() => setPage('tree')}>
-          MCTS Tree
+          Chain Analysis
         </button>
         <button style={tabStyle(page === 'tournament')} onClick={() => setPage('tournament')}>
           Tournament

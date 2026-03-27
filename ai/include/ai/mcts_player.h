@@ -1,7 +1,9 @@
 #pragma once
 
 #include "ai/player.h"
+#include "ai/turn_action.h"
 #include <random>
+#include <vector>
 
 namespace skipbo {
 
@@ -11,13 +13,18 @@ struct MoveAnalysis {
     int total_visits;
 };
 
+// Analysis result for a complete turn action (chain of moves)
+struct ChainAnalysis {
+    TurnAction action;
+    double reward;       // average reward (from root player's perspective)
+    int total_visits;
+};
+
 struct MCTSConfig {
     int num_determinizations = 20;
     int iterations_per_det = 500;
     double exploration = 1.414;
-    double rollout_heuristic_rate = 0.5; // 0.0 = pure random, 1.0 = pure heuristic
-    int max_tree_depth = 5; // max depth of MCTS tree (select/expand phase)
-    int rollout_depth = 10; // moves per player in rollout (total moves = 2 * rollout_depth)
+    int max_turn_depth = 4; // max turns per player in the tree
 };
 
 class MCTSPlayer : public Player {
@@ -27,27 +34,25 @@ public:
     Move choose_move(const GameState& observable_state,
                      const std::vector<Move>& legal_moves) override;
     std::string name() const override {
-        int pct = static_cast<int>(config_.rollout_heuristic_rate * 100);
-        return std::string("MCTS-") + std::to_string(pct) +
-               "-t" + std::to_string(config_.max_tree_depth) +
-               "-r" + std::to_string(config_.rollout_depth);
+        return std::string("MCTS-t") + std::to_string(config_.max_turn_depth);
     }
 
+    // Analyze turn actions for the current player. Returns per-chain analysis.
+    std::vector<ChainAnalysis> analyze_chains(const GameState& observable_state);
+
+    // Legacy: per-move analysis (extracts first move from best chains)
     std::vector<MoveAnalysis> analyze_moves(const GameState& observable_state,
                                             const std::vector<Move>& legal_moves);
-
-    // Run a single determinization and serialize the MCTS tree.
-    // Returns flat array: [parentIdx, source, target, visits, avgReward*1000, ...]
-    // Each node is 5 consecutive ints. Root has parentIdx=-1, source=-1, target=-1.
-    std::vector<int> analyze_tree(const GameState& observable_state,
-                                  const std::vector<Move>& legal_moves,
-                                  int viz_max_depth = 3, int viz_top_n = 10);
 
     void set_config(MCTSConfig config) { config_ = config; }
 
 private:
     std::mt19937 rng_;
     MCTSConfig config_;
+
+    // Cached turn plan for choose_move
+    std::vector<Move> planned_moves_;
+    size_t plan_idx_ = 0;
 };
 
 } // namespace skipbo

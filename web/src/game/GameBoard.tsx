@@ -3,7 +3,7 @@ import { CardView } from './CardView';
 import { PileView } from './PileView';
 import { DiscardPileView } from './DiscardPileView';
 import { type GameEngine, DIFFICULTY_PRESETS, type AIType } from '../hooks/useGameEngine';
-import { MoveSource, MoveTarget, cardToString, type GameSnapshot } from '../wasm/types';
+import { MoveSource, MoveTarget, cardToString, isDiscard as isDiscardTarget, type GameSnapshot, type ChainAnalysis, type Move } from '../wasm/types';
 
 function snapshotToText(snap: GameSnapshot): string {
   const c = (card: number) => cardToString(card) || '--';
@@ -70,7 +70,7 @@ function targetLabel(t: MoveTarget, snap: GameSnapshot): string {
 
 export function GameBoard({ engine }: GameBoardProps) {
   const { snapshot, isAIThinking, isAnalyzing, playMove, newGame, aiType, mctsConfig, setMctsConfig,
-    setAIType, analysis, showAnalysis, toggleAnalysis, reanalyze, isLoading } = engine;
+    setAIType, chains, showAnalysis, toggleAnalysis, reanalyze, isLoading } = engine;
   const [selectedSource, setSelectedSource] = useState<MoveSource | null>(null);
   const [showStateText, setShowStateText] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -91,8 +91,8 @@ export function GameBoard({ engine }: GameBoardProps) {
   }, [snapshot, selectedSource]);
 
   const getBestReward = (): number => {
-    if (!analysis || analysis.length === 0) return 0;
-    return Math.max(...analysis.map(a => a.reward));
+    if (!chains || chains.length === 0) return 0;
+    return Math.max(...chains.map(c => c.reward));
   };
 
   if (isLoading || !snapshot) {
@@ -358,39 +358,58 @@ export function GameBoard({ engine }: GameBoardProps) {
         </div>
       </div>
 
-      {/* Move analysis */}
+      {/* Chain analysis */}
       <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: 8, color: '#7c3aed' }}>
-        Move Analysis (reward)
+        Turn Chains (reward)
       </div>
-      {analysis && analysis.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {[...analysis]
-            .sort((a, b) => b.reward - a.reward)
-            .slice(0, 10)
-            .map((a, i) => {
-              const best = getBestReward();
-              const isBest = Math.abs(a.reward - best) < 0.001;
-              const rewardStr = (a.reward >= 0 ? '+' : '') + a.reward.toFixed(2);
-              const color = a.reward > 0.5 ? '#16a34a' : a.reward > 0 ? '#65a30d' : a.reward > -0.5 ? '#ca8a04' : '#dc2626';
-              return (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: 6,
-                  fontSize: '12px', fontWeight: isBest ? 700 : 400,
-                  color: isBest ? '#7c3aed' : '#4b5563',
-                }}>
-                  <span style={{ width: 120, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {sourceLabel(a.source, snapshot)} → {targetLabel(a.target, snapshot)}
+      {chains && chains.length > 0 ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {chains.slice(0, 12).map((chain, i) => {
+            const best = getBestReward();
+            const isBest = Math.abs(chain.reward - best) < 0.001;
+            const rewardStr = (chain.reward >= 0 ? '+' : '') + chain.reward.toFixed(2);
+            const rewardColor = chain.reward > 0.5 ? '#16a34a' : chain.reward > 0 ? '#65a30d' : chain.reward > -0.5 ? '#ca8a04' : '#dc2626';
+            // Separate builds from discard
+            const builds = chain.moves.filter(m => !isDiscardTarget(m.target as MoveTarget));
+            const disc = chain.moves.find(m => isDiscardTarget(m.target as MoveTarget));
+            return (
+              <div key={i} style={{
+                padding: '4px 6px', borderRadius: 4,
+                backgroundColor: isBest ? '#ede9fe' : '#f9fafb',
+                border: isBest ? '1px solid #c4b5fd' : '1px solid #e5e7eb',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                  <span style={{ fontSize: '11px', color: '#9ca3af' }}>
+                    {chain.visits.toLocaleString()} visits
                   </span>
-                  <span style={{ width: 50, textAlign: 'right', fontSize: '12px', fontWeight: 600, color, fontVariantNumeric: 'tabular-nums' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: rewardColor, fontVariantNumeric: 'tabular-nums' }}>
                     {rewardStr}
                   </span>
                 </div>
-              );
-            })}
+                {builds.length > 0 && (
+                  <div style={{ fontSize: '11px', color: '#4b5563', lineHeight: 1.5 }}>
+                    {builds.map((m, j) => (
+                      <span key={j}>
+                        {j > 0 && <span style={{ color: '#d1d5db' }}> → </span>}
+                        <span style={{ fontWeight: 500 }}>{sourceLabel(m.source as MoveSource, snapshot)}</span>
+                        <span style={{ color: '#9ca3af' }}>→</span>
+                        <span>{targetLabel(m.target as MoveTarget, snapshot)}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {disc && (
+                  <div style={{ fontSize: '11px', color: '#7c3aed', marginTop: 1 }}>
+                    Discard: {sourceLabel(disc.source as MoveSource, snapshot)} → {targetLabel(disc.target as MoveTarget, snapshot)}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div style={{ fontSize: '12px', color: '#9ca3af' }}>
-          {isAnalyzing ? 'Analyzing...' : isMyTurn ? 'Waiting for data' : 'Play a move to see analysis'}
+          {isAnalyzing ? 'Analyzing chains...' : isMyTurn ? 'Waiting for data' : 'Play a move to see analysis'}
         </div>
       )}
 
@@ -405,73 +424,28 @@ export function GameBoard({ engine }: GameBoardProps) {
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ width: 80, color: '#6b7280' }}>Iterations</span>
             <input
-              type="number"
-              min={10}
-              max={50000}
-              step={100}
+              type="number" min={10} max={50000} step={100}
               value={mctsConfig.iterations}
               onChange={e => setMctsConfig({ ...mctsConfig, iterations: Number(e.target.value) })}
-              style={{
-                width: 80, padding: '2px 6px', borderRadius: 4,
-                border: '1px solid #d1d5db', fontSize: '12px',
-              }}
+              style={{ width: 80, padding: '2px 6px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: '12px' }}
             />
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ width: 80, color: '#6b7280' }}>Dets</span>
             <input
-              type="number"
-              min={1}
-              max={100}
+              type="number" min={1} max={100}
               value={mctsConfig.determinizations}
               onChange={e => setMctsConfig({ ...mctsConfig, determinizations: Number(e.target.value) })}
-              style={{
-                width: 80, padding: '2px 6px', borderRadius: 4,
-                border: '1px solid #d1d5db', fontSize: '12px',
-              }}
+              style={{ width: 80, padding: '2px 6px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: '12px' }}
             />
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 80, color: '#6b7280' }}>Heuristic %</span>
+            <span style={{ width: 80, color: '#6b7280' }}>Turn Depth</span>
             <input
-              type="number"
-              min={0}
-              max={100}
-              step={10}
-              value={mctsConfig.heuristicPct}
-              onChange={e => setMctsConfig({ ...mctsConfig, heuristicPct: Number(e.target.value) })}
-              style={{
-                width: 80, padding: '2px 6px', borderRadius: 4,
-                border: '1px solid #d1d5db', fontSize: '12px',
-              }}
-            />
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 80, color: '#6b7280' }}>Tree Depth</span>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={mctsConfig.treeDepth}
-              onChange={e => setMctsConfig({ ...mctsConfig, treeDepth: Number(e.target.value) })}
-              style={{
-                width: 80, padding: '2px 6px', borderRadius: 4,
-                border: '1px solid #d1d5db', fontSize: '12px',
-              }}
-            />
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ width: 80, color: '#6b7280' }}>Rollout Depth</span>
-            <input
-              type="number"
-              min={1}
-              max={50}
-              value={mctsConfig.rolloutDepth}
-              onChange={e => setMctsConfig({ ...mctsConfig, rolloutDepth: Number(e.target.value) })}
-              style={{
-                width: 80, padding: '2px 6px', borderRadius: 4,
-                border: '1px solid #d1d5db', fontSize: '12px',
-              }}
+              type="number" min={1} max={10}
+              value={mctsConfig.turnDepth}
+              onChange={e => setMctsConfig({ ...mctsConfig, turnDepth: Number(e.target.value) })}
+              style={{ width: 80, padding: '2px 6px', borderRadius: 4, border: '1px solid #d1d5db', fontSize: '12px' }}
             />
           </label>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

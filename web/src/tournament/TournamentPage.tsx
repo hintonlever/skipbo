@@ -7,17 +7,15 @@ interface AISpec {
   type: number;
   iters: number;
   dets: number;
-  heuristicPct: number;
-  rolloutDepth: number;
-  treeDepth: number;
+  turnDepth: number;
 }
 
 const DEFAULT_PARTICIPANTS: AISpec[] = [
-  { name: 'Random',      type: 0, iters: 0,     dets: 0,  heuristicPct: 0,  rolloutDepth: 0,  treeDepth: 0 },
-  { name: 'Heuristic',   type: 1, iters: 0,     dets: 0,  heuristicPct: 0,  rolloutDepth: 0,  treeDepth: 0 },
-  { name: 'MCTS Easy',   type: 2, iters: 50,    dets: 3,  heuristicPct: 50, rolloutDepth: 10, treeDepth: 5 },
-  { name: 'MCTS Medium', type: 2, iters: 300,   dets: 10, heuristicPct: 50, rolloutDepth: 10, treeDepth: 5 },
-  { name: 'MCTS Hard',   type: 2, iters: 10000, dets: 20, heuristicPct: 50, rolloutDepth: 10, treeDepth: 5 },
+  { name: 'Random',      type: 0, iters: 0,     dets: 0,  turnDepth: 0 },
+  { name: 'Heuristic',   type: 1, iters: 0,     dets: 0,  turnDepth: 0 },
+  { name: 'MCTS Easy',   type: 2, iters: 50,    dets: 3,  turnDepth: 2 },
+  { name: 'MCTS Medium', type: 2, iters: 300,   dets: 10, turnDepth: 3 },
+  { name: 'MCTS Hard',   type: 2, iters: 2000,  dets: 20, turnDepth: 4 },
 ];
 
 interface PairResult {
@@ -121,8 +119,8 @@ export function TournamentPage() {
         const p1Idx = m % 2 === 0 ? j : i;
         jobs.push({
           jobIndex,
-          p0Type: p0.type, p0Iters: p0.iters, p0Dets: p0.dets, p0Heuristic: p0.heuristicPct, p0Rollout: p0.rolloutDepth, p0Tree: p0.treeDepth,
-          p1Type: p1.type, p1Iters: p1.iters, p1Dets: p1.dets, p1Heuristic: p1.heuristicPct, p1Rollout: p1.rolloutDepth, p1Tree: p1.treeDepth,
+          p0Type: p0.type, p0Iters: p0.iters, p0Dets: p0.dets, p0Heuristic: 0, p0Rollout: 0, p0Tree: p0.turnDepth,
+          p1Type: p1.type, p1Iters: p1.iters, p1Dets: p1.dets, p1Heuristic: 0, p1Rollout: 0, p1Tree: p1.turnDepth,
           seed: baseSeed + jobIndex,
           aiI: i, aiJ: j, p0Idx, p1Idx,
         });
@@ -286,24 +284,10 @@ export function TournamentPage() {
                         style={inputStyle} />
                     </label>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={labelStyle}>Heur%</span>
-                      <input type="number" min={0} max={100} step={10}
-                        value={ai.heuristicPct} disabled={isRunning}
-                        onChange={e => updateParticipant(idx, 'heuristicPct', Number(e.target.value))}
-                        style={inputStyle} />
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={labelStyle}>Tree</span>
-                      <input type="number" min={1} max={20}
-                        value={ai.treeDepth} disabled={isRunning}
-                        onChange={e => updateParticipant(idx, 'treeDepth', Number(e.target.value))}
-                        style={inputStyle} />
-                    </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={labelStyle}>Rollout</span>
-                      <input type="number" min={1} max={50}
-                        value={ai.rolloutDepth} disabled={isRunning}
-                        onChange={e => updateParticipant(idx, 'rolloutDepth', Number(e.target.value))}
+                      <span style={labelStyle}>Turn Depth</span>
+                      <input type="number" min={1} max={10}
+                        value={ai.turnDepth} disabled={isRunning}
+                        onChange={e => updateParticipant(idx, 'turnDepth', Number(e.target.value))}
                         style={inputStyle} />
                     </label>
                     <span style={{ fontSize: 11, color: '#9ca3af' }}>

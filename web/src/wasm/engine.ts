@@ -30,11 +30,11 @@ export interface GameController {
   getSkipBoPlayed(player: number): number;
   getLegalMoves(): VectorInt;
   applyMove(source: number, target: number): boolean;
-  playAITurn(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number, treeDepth: number): VectorInt;
+  playAITurn(iterations: number, determinizations: number, turnDepth: number): VectorInt;
   playHeuristicAITurn(): VectorInt;
   passTurn(): void;
-  analyzeMoves(iterations: number, determinizations: number, heuristicPct: number, rolloutDepth: number, treeDepth: number): VectorInt;
-  analyzeTree(iterations: number, heuristicPct: number, rolloutDepth: number, treeDepth: number, vizMaxDepth: number, vizTopN: number): VectorInt;
+  analyzeMoves(iterations: number, determinizations: number, turnDepth: number): VectorInt;
+  analyzeChains(iterations: number, determinizations: number, turnDepth: number): VectorInt;
   delete(): void;
 }
 
