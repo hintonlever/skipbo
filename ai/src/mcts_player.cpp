@@ -166,6 +166,7 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
             observable_state, observable_state.current_player, rng_);
 
         MCTSNode root(legal_moves);
+        root.acting_player = static_cast<uint8_t>(observable_state.current_player);
         int my_id = observable_state.current_player;
         int root_my_stock = observable_state.players[my_id].stock_size();
         int root_opp_stock = observable_state.players[1 - my_id].stock_size();
@@ -186,6 +187,7 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
 
             // EXPAND
             if (!node->fully_expanded() && !sim_state.game_over && depth < max_discards) {
+                uint8_t actor = sim_state.current_player;
                 std::uniform_int_distribution<int> dist(
                     0, node->untried_moves.size() - 1);
                 int idx = dist(rng_);
@@ -194,16 +196,18 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
                 MoveList next_moves;
                 get_legal_moves(sim_state, next_moves);
                 node = node->add_child(expand_move, next_moves);
+                node->acting_player = actor;
             }
 
-            // ROLLOUT
+            // ROLLOUT — reward is from root player's perspective
             double reward = rollout(sim_state, my_id, config_.rollout_heuristic_rate,
                                     config_.rollout_depth, root_my_stock, root_opp_stock, rng_);
 
-            // BACKPROPAGATE
+            // BACKPROPAGATE — negate reward at opponent nodes so UCB1
+            // selects the best move for whoever is acting at each level
             while (node != nullptr) {
                 node->visits++;
-                node->total_reward += reward;
+                node->total_reward += (node->acting_player == my_id) ? reward : -reward;
                 node = node->parent;
             }
         }
@@ -232,19 +236,22 @@ std::vector<MoveAnalysis> MCTSPlayer::analyze_moves(
 }
 
 // Recursively serialize MCTS tree in DFS order.
-// Each node: [parentIdx, source, target, visits, avgReward*1000]
+// Each node: [parentIdx, source, target, visits, avgReward*1000, actingPlayer]
+// Rewards are always from the root player's perspective.
 static void serialize_node(const MCTSNode& node, int parent_idx, int depth,
-                           int max_depth, int top_n, std::vector<int>& out) {
-    int my_idx = static_cast<int>(out.size() / 5);
+                           int max_depth, int top_n, int root_player,
+                           std::vector<int>& out) {
+    int my_idx = static_cast<int>(out.size() / 6);
 
     out.push_back(parent_idx);
     out.push_back(parent_idx == -1 ? -1 : static_cast<int>(node.move.source));
     out.push_back(parent_idx == -1 ? -1 : static_cast<int>(node.move.target));
     out.push_back(node.visits);
-    int avg_reward = node.visits > 0
-        ? static_cast<int>(node.total_reward / node.visits * 1000)
-        : 0;
-    out.push_back(avg_reward);
+    // Convert reward to root player's perspective (opponent nodes store negated)
+    double raw = node.visits > 0 ? node.total_reward / node.visits : 0.0;
+    if (node.acting_player != root_player && parent_idx != -1) raw = -raw;
+    out.push_back(static_cast<int>(raw * 1000));
+    out.push_back(static_cast<int>(node.acting_player));
 
     if (depth >= max_depth || node.children.empty()) return;
 
@@ -259,7 +266,7 @@ static void serialize_node(const MCTSNode& node, int parent_idx, int depth,
 
     int n = std::min(top_n, static_cast<int>(sorted.size()));
     for (int i = 0; i < n; ++i) {
-        serialize_node(*sorted[i], my_idx, depth + 1, max_depth, top_n, out);
+        serialize_node(*sorted[i], my_idx, depth + 1, max_depth, top_n, root_player, out);
     }
 }
 
@@ -275,6 +282,7 @@ std::vector<int> MCTSPlayer::analyze_tree(
         observable_state, observable_state.current_player, rng_);
 
     MCTSNode root(legal_moves);
+    root.acting_player = static_cast<uint8_t>(observable_state.current_player);
     int my_id = observable_state.current_player;
     int root_my_stock = observable_state.players[my_id].stock_size();
     int root_opp_stock = observable_state.players[1 - my_id].stock_size();
@@ -284,8 +292,6 @@ std::vector<int> MCTSPlayer::analyze_tree(
         MCTSNode* node = &root;
         int depth = 0;
 
-        // SELECT — depth counts complete turns (discards); limit is per player,
-        // so max_tree_depth=3 means 3 turns each = 6 discards total.
         int max_discards = config_.max_tree_depth * 2;
         while (node->fully_expanded() && !node->is_leaf() && depth < max_discards) {
             node = node->select_child();
@@ -293,8 +299,8 @@ std::vector<int> MCTSPlayer::analyze_tree(
             if (node->move.is_discard()) depth++;
         }
 
-        // EXPAND
         if (!node->fully_expanded() && !sim_state.game_over && depth < max_discards) {
+            uint8_t actor = sim_state.current_player;
             std::uniform_int_distribution<int> dist(0, node->untried_moves.size() - 1);
             int idx = dist(rng_);
             Move expand_move = node->untried_moves[idx];
@@ -302,23 +308,22 @@ std::vector<int> MCTSPlayer::analyze_tree(
             MoveList next_moves;
             get_legal_moves(sim_state, next_moves);
             node = node->add_child(expand_move, next_moves);
+            node->acting_player = actor;
         }
 
-        // ROLLOUT
         double reward = rollout(sim_state, my_id, config_.rollout_heuristic_rate,
                                 config_.rollout_depth, root_my_stock, root_opp_stock, rng_);
 
-        // BACKPROPAGATE
         while (node != nullptr) {
             node->visits++;
-            node->total_reward += reward;
+            node->total_reward += (node->acting_player == my_id) ? reward : -reward;
             node = node->parent;
         }
     }
 
     // Serialize the tree
     std::vector<int> result;
-    serialize_node(root, -1, 0, viz_max_depth, viz_top_n, result);
+    serialize_node(root, -1, 0, viz_max_depth, viz_top_n, my_id, result);
     return result;
 }
 

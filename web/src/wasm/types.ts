@@ -79,23 +79,25 @@ export interface TreeNode {
   source: number;
   target: number;
   visits: number;
-  avgReward: number;
+  avgReward: number;  // always from root player's perspective
+  actingPlayer: number;  // 0 = you, 1 = opponent
   children: TreeNode[];
 }
 
-// Parse flat tree array [parentIdx, source, target, visits, avgReward*1000, ...] into a tree
+// Parse flat tree array [parentIdx, source, target, visits, avgReward*1000, actingPlayer, ...] into a tree
 export function parseTree(flat: number[]): TreeNode | null {
-  if (flat.length < 5) return null;
+  if (flat.length < 6) return null;
 
   const nodes: TreeNode[] = [];
-  for (let i = 0; i < flat.length; i += 5) {
+  for (let i = 0; i < flat.length; i += 6) {
     nodes.push({
-      index: i / 5,
+      index: i / 6,
       parentIndex: flat[i],
       source: flat[i + 1],
       target: flat[i + 2],
       visits: flat[i + 3],
       avgReward: flat[i + 4] / 1000,
+      actingPlayer: flat[i + 5],
       children: [],
     });
   }

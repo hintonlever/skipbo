@@ -10,7 +10,7 @@ constexpr int NUM_PLAYERS = 2;
 constexpr int HAND_SIZE = 5;
 constexpr int NUM_DISCARD_PILES = 4;
 constexpr int NUM_BUILDING_PILES = 4;
-constexpr int STOCK_PILE_SIZE = 30;
+constexpr int STOCK_PILE_SIZE = 15;
 
 struct PlayerState {
     CardStack<STOCK_PILE_SIZE> stock_pile;

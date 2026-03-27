@@ -73,11 +73,21 @@ function TreeNodeRow({ node, snapshot, depth, parentVisits }: {
           {hasChildren ? (expanded ? '\u25BC' : '\u25B6') : '\u00B7'}
         </span>
 
-        {/* Move label */}
+        {/* Player indicator + Move label */}
+        {!isRoot && (
+          <span style={{
+            fontSize: '10px', fontWeight: 600, flexShrink: 0,
+            padding: '1px 5px', borderRadius: 3,
+            backgroundColor: node.actingPlayer === 0 ? '#dbeafe' : '#fee2e2',
+            color: node.actingPlayer === 0 ? '#1e40af' : '#991b1b',
+          }}>
+            {node.actingPlayer === 0 ? 'You' : 'AI'}
+          </span>
+        )}
         <span style={{
           fontWeight: isRoot ? 700 : depth === 1 ? 600 : 400,
           color: isRoot ? '#7c3aed' : '#1f2937',
-          minWidth: 160,
+          minWidth: 140,
           flexShrink: 0,
         }}>
           {moveLabel(node.source, node.target, snapshot)}

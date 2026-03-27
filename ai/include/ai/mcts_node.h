@@ -14,6 +14,7 @@ struct MCTSNode {
     int visits = 0;
     double total_reward = 0.0;
     MoveList untried_moves;
+    uint8_t acting_player = 0;  // who played this node's move
 
     MCTSNode() = default;
     explicit MCTSNode(const MoveList& legal_moves);
