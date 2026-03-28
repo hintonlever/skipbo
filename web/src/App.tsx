@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { GameBoard } from './game/GameBoard';
 import { MCTSTreeView } from './game/MCTSTreeView';
 import { TournamentPage } from './tournament/TournamentPage';
+import { TrainingPage } from './training/TrainingPage';
 import { useGameEngine } from './hooks/useGameEngine';
 
-type Page = 'game' | 'tree' | 'tournament';
+type Page = 'game' | 'tree' | 'tournament' | 'training';
 
 function App() {
   const engine = useGameEngine();
@@ -36,11 +37,20 @@ function App() {
         <button style={tabStyle(page === 'tournament')} onClick={() => setPage('tournament')}>
           Tournament
         </button>
+        <button style={tabStyle(page === 'training')} onClick={() => setPage('training')}>
+          Training
+        </button>
       </div>
 
       {page === 'game' && <GameBoard engine={engine} />}
       {page === 'tree' && <MCTSTreeView engine={engine} />}
       {page === 'tournament' && <TournamentPage />}
+      {page === 'training' && (
+        <TrainingPage
+          onLoadWeights={engine.loadNNWeights}
+          activeGeneration={engine.activeGeneration}
+        />
+      )}
     </div>
   );
 }

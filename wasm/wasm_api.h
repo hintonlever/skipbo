@@ -6,6 +6,8 @@
 #include "ai/heuristic_player.h"
 #include "ai/heuristic_random_discard_player.h"
 #include "ai/mcts_player.h"
+#include "ai/nn_mcts_player.h"
+#include "ai/nn_encoding.h"
 #include <vector>
 #include <random>
 #include <queue>
@@ -321,6 +323,57 @@ public:
         return out;
     }
 
+    // --- Neural Network AI ---
+
+    // Load NN weights (flat float arrays from Python training)
+    void loadNNWeights(std::vector<float> valueWeights, std::vector<float> policyWeights) {
+        nn_.load_value_network(valueWeights);
+        nn_.load_policy_network(policyWeights);
+    }
+
+    bool hasNNWeights() const {
+        return nn_.has_value_network() && nn_.has_policy_network();
+    }
+
+    // Let the NN-MCTS AI play its turn. Requires weights to be loaded.
+    std::vector<int> playNNAITurn(int iterations, int determinizations, int turnDepth, float cpuct) {
+        if (!hasNNWeights()) return {};
+        NNMCTSConfig config;
+        config.iterations_per_det = iterations;
+        config.num_determinizations = determinizations;
+        config.max_turn_depth = turnDepth;
+        config.c_puct = cpuct;
+        NNMCTSPlayer nn_ai(rng_(), config, nn_);
+        return playAITurnWith(nn_ai);
+    }
+
+    // Analyze chains using NN-MCTS for the current player
+    std::vector<int> analyzeNNChains(int iterations, int determinizations, int turnDepth, float cpuct) {
+        if (!hasNNWeights()) return {0}; // empty chain list
+        NNMCTSConfig config;
+        config.iterations_per_det = iterations;
+        config.num_determinizations = determinizations;
+        config.max_turn_depth = turnDepth;
+        config.c_puct = cpuct;
+        NNMCTSPlayer nn_ai(rng_(), config, nn_);
+
+        auto chains = nn_ai.analyze_chains(game_.state());
+
+        std::vector<int> result;
+        result.push_back(static_cast<int>(chains.size()));
+        for (const auto& ca : chains) {
+            result.push_back(ca.action.num_moves);
+            for (int i = 0; i < ca.action.num_moves; i++) {
+                result.push_back(static_cast<int>(ca.action.moves[i].source));
+                result.push_back(static_cast<int>(ca.action.moves[i].target));
+                result.push_back(static_cast<int>(ca.action.cards[i]));
+            }
+            result.push_back(ca.total_visits);
+            result.push_back(static_cast<int>(ca.reward * 1000));
+        }
+        return result;
+    }
+
     // Legacy: per-move analysis
     std::vector<int> analyzeMoves(int iterations, int determinizations, int turnDepth) {
         MCTSConfig config;
@@ -346,6 +399,7 @@ private:
     Game game_;
     MCTSPlayer ai_;
     HeuristicPlayer heuristic_ai_;
+    NeuralNet nn_;
     std::mt19937 rng_;
     std::array<int, NUM_PLAYERS> skipbo_played_ = {0, 0};
 
@@ -450,6 +504,187 @@ inline std::vector<int> wasm_run_match(
     int s0 = game.state().players[0].stock_size();
     int s1 = game.state().players[1].stock_size();
     return {winner, turns, s0, s1};
+}
+
+// Run a match and log training data (state encodings + chain encodings + outcomes).
+// Returns flat int array with all turn records.
+// Format: [num_turns,
+//   for each turn: 158 state ints (float*10000), num_chains,
+//     for each chain: 29 chain ints (float*10000),
+//   chosen_chain_idx, outcome (filled at end, +10000 or -10000)]
+inline std::vector<int> wasm_run_match_logged(
+    int p0Type, int p0Iters, int p0Dets, int p0Tree,
+    int p1Type, int p1Iters, int p1Dets, int p1Tree,
+    int seed, int maxChainsPerTurn)
+{
+    auto make_player = [](int type, int iters, int dets, int tree,
+                          uint64_t s) -> std::unique_ptr<Player> {
+        switch (type) {
+            case 1: return std::make_unique<HeuristicPlayer>();
+            case 3: return std::make_unique<HeuristicRandomDiscardPlayer>();
+            case 2: {
+                MCTSConfig cfg;
+                cfg.iterations_per_det = iters;
+                cfg.num_determinizations = dets;
+                cfg.max_turn_depth = tree;
+                return std::make_unique<MCTSPlayer>(s, cfg);
+            }
+            default: return std::make_unique<RandomPlayer>(s);
+        }
+    };
+
+    auto p0 = make_player(p0Type, p0Iters, p0Dets, p0Tree,
+                           static_cast<uint64_t>(seed + 1000));
+    auto p1 = make_player(p1Type, p1Iters, p1Dets, p1Tree,
+                           static_cast<uint64_t>(seed + 2000));
+
+    Game game(static_cast<uint64_t>(seed));
+    game.setup();
+    std::mt19937 log_rng(static_cast<uint64_t>(seed + 3000));
+
+    Player* players[2] = {p0.get(), p1.get()};
+    int turns = 0;
+    int consecutive_passes = 0;
+
+    // Collect turn records: each stores (perspective_player, state_enc, chains, chosen_idx)
+    struct TurnRecord {
+        int perspective;
+        float state[STATE_ENCODING_SIZE];
+        std::vector<std::array<float, CHAIN_ENCODING_SIZE>> chains;
+        int chosen_idx;
+    };
+    std::vector<TurnRecord> records;
+
+    while (!game.is_game_over() && turns < 5000 && consecutive_passes < 4) {
+        auto moves = get_legal_moves(game.state());
+        if (moves.empty()) {
+            game.pass_turn();
+            consecutive_passes++;
+            continue;
+        }
+        consecutive_passes = 0;
+
+        int cp = game.current_player();
+
+        // At the start of each turn (before any builds), log the state and chains
+        bool is_turn_start = true;
+        for (const auto& m : moves) {
+            if (!m.is_discard()) { /* has build moves, could be mid-turn */ }
+        }
+        // Heuristic: if we have discard moves available, this is likely a decision point.
+        // Log at every move for simplicity, but only once per turn by checking
+        // if the previous move was a discard (or this is the first move).
+
+        // Generate all turn actions for logging
+        auto turn_actions = generate_turn_actions(game.state(), log_rng,
+                                                  maxChainsPerTurn);
+
+        if (!turn_actions.empty()) {
+            TurnRecord rec;
+            rec.perspective = cp;
+            GameState pre_turn_state = game.state();
+            encode_state(pre_turn_state, cp, rec.state);
+
+            rec.chains.resize(turn_actions.size());
+            for (size_t i = 0; i < turn_actions.size(); i++) {
+                encode_chain(pre_turn_state, turn_actions[i],
+                             rec.chains[i].data());
+            }
+
+            // Play out the turn and figure out which chain was chosen
+            while (!game.is_game_over() && game.current_player() == cp) {
+                auto legal = get_legal_moves(game.state());
+                if (legal.empty()) { game.pass_turn(); break; }
+                Move chosen = players[cp]->choose_move(game.state(), legal);
+                game.apply_move(chosen);
+                if (chosen.is_discard()) break;
+                if (game.current_player() != cp) break;
+            }
+
+            // Match by result: apply each candidate chain to the pre-turn state
+            // and compare building piles + discard pile state with actual result.
+            const GameState& post_state = game.state();
+            rec.chosen_idx = -1;
+            for (size_t i = 0; i < turn_actions.size(); i++) {
+                GameState sim = pre_turn_state;
+                apply_turn_action(sim, turn_actions[i], &log_rng);
+
+                // Compare building pile counts
+                bool match = true;
+                for (int b = 0; b < NUM_BUILDING_PILES; b++) {
+                    if (sim.building_pile_count[b] != post_state.building_pile_count[b]) {
+                        match = false; break;
+                    }
+                }
+                if (!match) continue;
+
+                // Compare current player's discard piles (top cards and sizes)
+                const auto& sim_p = sim.players[cp];
+                const auto& post_p = post_state.players[cp];
+                for (int d = 0; d < NUM_DISCARD_PILES && match; d++) {
+                    if (sim_p.discard_piles[d].size() != post_p.discard_piles[d].size()) {
+                        match = false;
+                    } else if (!sim_p.discard_piles[d].empty() && !post_p.discard_piles[d].empty()) {
+                        if (sim_p.discard_piles[d].back() != post_p.discard_piles[d].back()) {
+                            match = false;
+                        }
+                    }
+                }
+                if (!match) continue;
+
+                // Compare stock sizes
+                if (sim_p.stock_size() != post_p.stock_size()) continue;
+
+                rec.chosen_idx = static_cast<int>(i);
+                break;
+            }
+
+            records.push_back(std::move(rec));
+            turns++;
+            continue; // already played the turn above
+        }
+
+        // Fallback: no turn actions generated, just play the move normally
+        Move chosen = players[cp]->choose_move(game.state(), moves);
+        game.apply_move(chosen);
+        if (chosen.is_discard()) ++turns;
+    }
+
+    // Determine winner
+    int winner = game.winner();
+    if (!game.is_game_over()) {
+        int s0 = game.state().players[0].stock_size();
+        int s1 = game.state().players[1].stock_size();
+        if (s0 < s1) winner = 0;
+        else if (s1 < s0) winner = 1;
+        else winner = seed % 2;
+    }
+
+    // Build output
+    std::vector<int> out;
+    out.push_back(static_cast<int>(records.size()));
+
+    for (const auto& rec : records) {
+        // State encoding (158 ints)
+        for (int i = 0; i < STATE_ENCODING_SIZE; i++) {
+            out.push_back(static_cast<int>(rec.state[i] * 10000.0f));
+        }
+        // Num chains
+        out.push_back(static_cast<int>(rec.chains.size()));
+        // Chain encodings
+        for (const auto& chain : rec.chains) {
+            for (int i = 0; i < CHAIN_ENCODING_SIZE; i++) {
+                out.push_back(static_cast<int>(chain[i] * 10000.0f));
+            }
+        }
+        // Chosen chain index
+        out.push_back(rec.chosen_idx);
+        // Outcome from this player's perspective
+        int outcome = (winner == rec.perspective) ? 10000 : -10000;
+        out.push_back(outcome);
+    }
+
+    return out;
 }
 
 } // namespace skipbo

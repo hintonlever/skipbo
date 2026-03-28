@@ -6,8 +6,10 @@ using namespace skipbo;
 
 EMSCRIPTEN_BINDINGS(skipbo) {
     register_vector<int>("VectorInt");
+    register_vector<float>("VectorFloat");
 
     function("runMatch", &skipbo::wasm_run_match);
+    function("runMatchLogged", &skipbo::wasm_run_match_logged);
 
     class_<WasmGameController>("GameController")
         .constructor<int>()
@@ -35,5 +37,10 @@ EMSCRIPTEN_BINDINGS(skipbo) {
         .function("analyzeMoves", &WasmGameController::analyzeMoves)
         .function("analyzeChains", &WasmGameController::analyzeChains)
         .function("getMoveTree", &WasmGameController::getMoveTree)
+        // Neural network
+        .function("loadNNWeights", &WasmGameController::loadNNWeights)
+        .function("hasNNWeights", &WasmGameController::hasNNWeights)
+        .function("playNNAITurn", &WasmGameController::playNNAITurn)
+        .function("analyzeNNChains", &WasmGameController::analyzeNNChains)
         ;
 }

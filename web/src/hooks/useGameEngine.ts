@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { initEngine, vectorToArray, type GameController } from '../wasm/engine';
+import { initEngine, vectorToArray, arrayToVectorFloat, type GameController, type SkipBoModule } from '../wasm/engine';
 import {
   type GameSnapshot, type ChainAnalysis, type MoveTreeNode,
   MoveSource, MoveTarget, parseMovePairs, parseChains, parseMoveTree, isDiscard
@@ -51,6 +51,7 @@ export interface GameEngine {
   chains: ChainAnalysis[] | null;
   moveTree: MoveTreeNode | null;
   showAnalysis: boolean;
+  activeGeneration: string | null;
   playMove: (source: MoveSource, target: MoveTarget) => void;
   newGame: () => void;
   setAIType: (type: AIType) => void;
@@ -58,6 +59,7 @@ export interface GameEngine {
   toggleAnalysis: () => void;
   reanalyze: () => void;
   refreshMoveTree: () => void;
+  loadNNWeights: (name: string, valueWeights: number[], policyWeights: number[]) => Promise<void>;
 }
 
 export function useGameEngine(): GameEngine {
@@ -71,6 +73,8 @@ export function useGameEngine(): GameEngine {
   const [chains, setChains] = useState<ChainAnalysis[] | null>(null);
   const [moveTree, setMoveTree] = useState<MoveTreeNode | null>(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [activeGeneration, setActiveGeneration] = useState<string | null>(null);
+  const moduleRef = useRef<SkipBoModule | null>(null);
   const showAnalysisRef = useRef(showAnalysis);
   showAnalysisRef.current = showAnalysis;
   const aiTypeRef = useRef(aiType);
@@ -126,6 +130,7 @@ export function useGameEngine(): GameEngine {
     setIsLoading(true);
     try {
       const module = await initEngine();
+      moduleRef.current = module;
       if (ctrlRef.current) {
         ctrlRef.current.delete();
       }
@@ -183,6 +188,18 @@ export function useGameEngine(): GameEngine {
     }
   }, [refreshSnapshot, runAITurn]);
 
+  const loadNNWeights = useCallback(async (name: string, valueWeights: number[], policyWeights: number[]) => {
+    const ctrl = ctrlRef.current;
+    const module = moduleRef.current;
+    if (!ctrl || !module) return;
+    const vw = arrayToVectorFloat(module, valueWeights);
+    const pw = arrayToVectorFloat(module, policyWeights);
+    ctrl.loadNNWeights(vw, pw);
+    vw.delete();
+    pw.delete();
+    setActiveGeneration(name);
+  }, []);
+
   const toggleAnalysis = useCallback(() => {
     setShowAnalysis(prev => {
       const next = !prev;
@@ -205,6 +222,7 @@ export function useGameEngine(): GameEngine {
     chains,
     moveTree,
     showAnalysis,
+    activeGeneration,
     playMove,
     newGame: startGame,
     setAIType,
@@ -212,5 +230,6 @@ export function useGameEngine(): GameEngine {
     toggleAnalysis,
     reanalyze: runAnalysis,
     refreshMoveTree,
+    loadNNWeights,
   };
 }

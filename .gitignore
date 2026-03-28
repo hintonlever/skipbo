@@ -11,3 +11,11 @@ web/public/wasm/*.wasm
 
 .cache/*
 
+# Python
+server/venv/
+__pycache__/
+*.pyc
+
+# Training data and model weights (generated, not source)
+data/
+

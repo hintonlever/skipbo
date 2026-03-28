@@ -2,16 +2,29 @@
 
 export interface SkipBoModule {
   GameController: new (seed: number) => GameController;
+  VectorFloat: new () => VectorFloat;
   runMatch(
     p0Type: number, p0Iters: number, p0Dets: number, p0Heuristic: number, p0Rollout: number, p0Tree: number,
     p1Type: number, p1Iters: number, p1Dets: number, p1Heuristic: number, p1Rollout: number, p1Tree: number,
     seed: number
+  ): VectorInt;
+  runMatchLogged(
+    p0Type: number, p0Iters: number, p0Dets: number, p0Tree: number,
+    p1Type: number, p1Iters: number, p1Dets: number, p1Tree: number,
+    seed: number, maxChains: number
   ): VectorInt;
 }
 
 export interface VectorInt {
   size(): number;
   get(i: number): number;
+  delete(): void;
+}
+
+export interface VectorFloat {
+  size(): number;
+  get(i: number): number;
+  push_back(v: number): void;
   delete(): void;
 }
 
@@ -36,6 +49,11 @@ export interface GameController {
   analyzeMoves(iterations: number, determinizations: number, turnDepth: number): VectorInt;
   analyzeChains(iterations: number, determinizations: number, turnDepth: number): VectorInt;
   getMoveTree(): VectorInt;
+  // Neural network
+  loadNNWeights(valueWeights: VectorFloat, policyWeights: VectorFloat): void;
+  hasNNWeights(): boolean;
+  playNNAITurn(iterations: number, determinizations: number, turnDepth: number, cpuct: number): VectorInt;
+  analyzeNNChains(iterations: number, determinizations: number, turnDepth: number, cpuct: number): VectorInt;
   delete(): void;
 }
 
@@ -81,4 +99,11 @@ export function vectorToArray(v: VectorInt): number[] {
   }
   v.delete();
   return arr;
+}
+
+// Helper to create a VectorFloat from a JS array (for passing weights to WASM)
+export function arrayToVectorFloat(module: SkipBoModule, arr: number[]): VectorFloat {
+  const v = new module.VectorFloat();
+  for (const val of arr) v.push_back(val);
+  return v;
 }
