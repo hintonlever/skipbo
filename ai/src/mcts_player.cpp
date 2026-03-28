@@ -25,11 +25,18 @@ struct TurnNode {
     // Actions available from this node's state
     std::vector<TurnAction> actions;
     int next_untried = 0;
+    bool actions_generated = false;
 
     bool fully_expanded() const {
-        return next_untried >= static_cast<int>(actions.size());
+        // Actions not yet generated — must expand to generate them first
+        if (!actions_generated) return false;
+        if (actions.empty()) return true; // no legal actions (game over or dead end)
+        if (next_untried >= static_cast<int>(actions.size())) return true;
+        // Progressive widening: only expand sqrt(visits) children.
+        int max_children = std::max(1, static_cast<int>(std::sqrt(visits + 1)));
+        return static_cast<int>(children.size()) >= max_children;
     }
-    bool is_leaf() const { return children.empty(); }
+    bool is_leaf() const { return children.empty() && actions_generated; }
 
     double ucb1(double exploration) const {
         if (visits == 0) return std::numeric_limits<double>::infinity();
@@ -90,7 +97,8 @@ std::vector<ChainAnalysis> MCTSPlayer::analyze_chains(
         // Build tree root
         TurnNode root;
         root.acting_player = static_cast<uint8_t>(my_id);
-        root.actions = root_actions; // copy the root actions
+        root.actions = root_actions;
+        root.actions_generated = true;
 
         int max_turns = config_.max_turn_depth * 2; // per player * 2
 
@@ -112,9 +120,12 @@ std::vector<ChainAnalysis> MCTSPlayer::analyze_chains(
             // EXPAND
             if (!node->fully_expanded() && !sim.game_over &&
                 turn_depth < max_turns) {
-                // Generate actions for this node if not yet done
-                if (node->actions.empty() && node != &root) {
-                    node->actions = generate_turn_actions(sim, rng_);
+                // Generate actions for this node if not yet done.
+                // Non-root nodes get a small budget (few actions) to keep
+                // deeper search fast and focused.
+                if (!node->actions_generated && node != &root) {
+                    node->actions = generate_turn_actions(sim, rng_, 8);
+                    node->actions_generated = true;
                 }
                 if (!node->actions.empty() && !node->fully_expanded()) {
                     TurnNode* child = node->expand(rng_);

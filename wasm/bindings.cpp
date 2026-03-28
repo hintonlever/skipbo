@@ -34,5 +34,6 @@ EMSCRIPTEN_BINDINGS(skipbo) {
         // Analysis
         .function("analyzeMoves", &WasmGameController::analyzeMoves)
         .function("analyzeChains", &WasmGameController::analyzeChains)
+        .function("getMoveTree", &WasmGameController::getMoveTree)
         ;
 }

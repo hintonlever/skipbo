@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { initEngine, vectorToArray, type GameController } from '../wasm/engine';
 import {
-  type GameSnapshot, type ChainAnalysis,
-  MoveSource, MoveTarget, parseMovePairs, parseChains, isDiscard
+  type GameSnapshot, type ChainAnalysis, type MoveTreeNode,
+  MoveSource, MoveTarget, parseMovePairs, parseChains, parseMoveTree, isDiscard
 } from '../wasm/types';
 
 function takeSnapshot(ctrl: GameController): GameSnapshot {
@@ -36,9 +36,9 @@ export interface MCTSConfig {
 
 export const DIFFICULTY_PRESETS: { label: string; aiType: AIType; config: MCTSConfig }[] = [
   { label: 'Heuristic', aiType: 'heuristic', config: { iterations: 0, determinizations: 0, turnDepth: 0 } },
-  { label: 'Easy',   aiType: 'mcts', config: { iterations: 50,    determinizations: 3,  turnDepth: 2 } },
-  { label: 'Medium', aiType: 'mcts', config: { iterations: 300,   determinizations: 10, turnDepth: 3 } },
-  { label: 'Hard',   aiType: 'mcts', config: { iterations: 2000,  determinizations: 20, turnDepth: 4 } },
+  { label: 'Easy',   aiType: 'mcts', config: { iterations: 100,   determinizations: 5,  turnDepth: 1 } },
+  { label: 'Medium', aiType: 'mcts', config: { iterations: 500,   determinizations: 10, turnDepth: 2 } },
+  { label: 'Hard',   aiType: 'mcts', config: { iterations: 2000,  determinizations: 20, turnDepth: 2 } },
 ];
 
 export interface GameEngine {
@@ -49,6 +49,7 @@ export interface GameEngine {
   aiType: AIType;
   mctsConfig: MCTSConfig;
   chains: ChainAnalysis[] | null;
+  moveTree: MoveTreeNode | null;
   showAnalysis: boolean;
   playMove: (source: MoveSource, target: MoveTarget) => void;
   newGame: () => void;
@@ -56,6 +57,7 @@ export interface GameEngine {
   setMctsConfig: (config: MCTSConfig) => void;
   toggleAnalysis: () => void;
   reanalyze: () => void;
+  refreshMoveTree: () => void;
 }
 
 export function useGameEngine(): GameEngine {
@@ -67,6 +69,7 @@ export function useGameEngine(): GameEngine {
   const [aiType, setAIType] = useState<AIType>(DIFFICULTY_PRESETS[2].aiType);
   const [mctsConfig, setMctsConfig] = useState<MCTSConfig>(DIFFICULTY_PRESETS[2].config);
   const [chains, setChains] = useState<ChainAnalysis[] | null>(null);
+  const [moveTree, setMoveTree] = useState<MoveTreeNode | null>(null);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const showAnalysisRef = useRef(showAnalysis);
   showAnalysisRef.current = showAnalysis;
@@ -93,10 +96,26 @@ export function useGameEngine(): GameEngine {
     }, 30);
   }, []);
 
+  const refreshMoveTree = useCallback(() => {
+    const ctrl = ctrlRef.current;
+    if (!ctrl || ctrl.isGameOver() || ctrl.getCurrentPlayer() !== 0) {
+      setMoveTree(null);
+      return;
+    }
+    try {
+      const flat = vectorToArray(ctrl.getMoveTree());
+      setMoveTree(parseMoveTree(flat));
+    } catch (e) {
+      console.error('getMoveTree failed:', e);
+      setMoveTree(null);
+    }
+  }, []);
+
   const refreshSnapshot = useCallback((andAnalyze: boolean = false) => {
     if (ctrlRef.current) {
       setSnapshot(takeSnapshot(ctrlRef.current));
       setChains(null);
+      setMoveTree(null);
       if (andAnalyze || showAnalysisRef.current) {
         runAnalysis();
       }
@@ -184,6 +203,7 @@ export function useGameEngine(): GameEngine {
     aiType,
     mctsConfig,
     chains,
+    moveTree,
     showAnalysis,
     playMove,
     newGame: startGame,
@@ -191,5 +211,6 @@ export function useGameEngine(): GameEngine {
     setMctsConfig,
     toggleAnalysis,
     reanalyze: runAnalysis,
+    refreshMoveTree,
   };
 }

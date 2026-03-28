@@ -4,9 +4,12 @@
 #include "engine/rules.h"
 #include "ai/random_player.h"
 #include "ai/heuristic_player.h"
+#include "ai/heuristic_random_discard_player.h"
 #include "ai/mcts_player.h"
 #include <vector>
 #include <random>
+#include <queue>
+#include <unordered_set>
 
 namespace skipbo {
 
@@ -141,8 +144,9 @@ public:
     // --- Analysis ---
 
     // Analyze chains for the current player. Returns flat array:
-    // [numChains, numMoves1, src, tgt, src, tgt, ..., visits, reward*1000,
-    //             numMoves2, src, tgt, ..., visits, reward*1000, ...]
+    // [numChains, numMoves1, src, tgt, card, src, tgt, card, ..., visits, reward*1000,
+    //             numMoves2, src, tgt, card, ..., visits, reward*1000, ...]
+    // Card values are resolved at chain generation time (not from current snapshot).
     std::vector<int> analyzeChains(int iterations, int determinizations, int turnDepth) {
         MCTSConfig config;
         config.iterations_per_det = iterations;
@@ -159,11 +163,162 @@ public:
             for (int i = 0; i < ca.action.num_moves; i++) {
                 result.push_back(static_cast<int>(ca.action.moves[i].source));
                 result.push_back(static_cast<int>(ca.action.moves[i].target));
+                result.push_back(static_cast<int>(ca.action.cards[i]));
             }
             result.push_back(ca.total_visits);
             result.push_back(static_cast<int>(ca.reward * 1000));
         }
         return result;
+    }
+
+    // Enumerate the full move tree from the current state.
+    // Each node: [parentIdx, source, target, card, nodeType]
+    // nodeType: 0=build, 1=stock_play (clears stock - terminal), 2=discard (end turn), 3=hand_empty (draw 5)
+    // Root node has parentIdx=-1, source=-1, target=-1, card=-1, nodeType=-1
+    std::vector<int> getMoveTree() {
+        const auto& state = game_.state();
+        int cp = state.current_player;
+        const int FIELDS = 5;
+
+        struct TreeBuildNode {
+            GameState state;
+            int parent_idx;
+        };
+
+        std::vector<int> out;
+        // Root node
+        out.push_back(-1); out.push_back(-1); out.push_back(-1); out.push_back(-1); out.push_back(-1);
+
+        // BFS
+        std::queue<TreeBuildNode> queue;
+        queue.push({state, 0});
+
+        // State dedup to avoid infinite/redundant expansion
+        std::unordered_set<uint64_t> visited;
+
+        int max_nodes = 2000;
+
+        while (!queue.empty() && static_cast<int>(out.size()) / FIELDS < max_nodes) {
+            auto [cur_state, parent] = queue.front();
+            queue.pop();
+
+            MoveList all_moves;
+            get_legal_moves(cur_state, all_moves);
+
+            // Separate builds and discards
+            MoveList build_moves, discard_moves;
+            for (int i = 0; i < all_moves.size(); i++) {
+                if (all_moves[i].is_discard()) discard_moves.push_back(all_moves[i]);
+                else build_moves.push_back(all_moves[i]);
+            }
+
+            // Collapse equivalent builds
+            // Group by (card_value, pile_count, source_kind)
+            {
+                struct Key { Card card; uint8_t cnt; uint8_t sk; };
+                MoveList collapsed;
+                Key seen[64]; int sc = 0;
+                for (int i = 0; i < build_moves.size(); i++) {
+                    const auto& m = build_moves[i];
+                    const auto& p = cur_state.players[cp];
+                    Card card = m.is_from_hand() ? p.hand[m.hand_index()] :
+                                m.is_from_stock() ? p.stock_top() :
+                                p.discard_top(m.source_discard_index());
+                    uint8_t cnt = cur_state.building_pile_count[m.target_building_index()];
+                    uint8_t sk = m.is_from_hand() ? 0 : m.is_from_stock() ? 1 : (2 + m.source_discard_index());
+                    bool dup = false;
+                    for (int j = 0; j < sc; j++)
+                        if (seen[j].card == card && seen[j].cnt == cnt && seen[j].sk == sk) { dup = true; break; }
+                    if (!dup) { seen[sc++] = {card, cnt, sk}; collapsed.push_back(m); }
+                }
+                build_moves = collapsed;
+            }
+
+            // Add build move nodes
+            for (int i = 0; i < build_moves.size(); i++) {
+                if (static_cast<int>(out.size()) / FIELDS >= max_nodes) break;
+                const auto& m = build_moves[i];
+                const auto& p = cur_state.players[cp];
+                Card card = m.is_from_hand() ? p.hand[m.hand_index()] :
+                            m.is_from_stock() ? p.stock_top() :
+                            p.discard_top(m.source_discard_index());
+
+                int my_idx = static_cast<int>(out.size()) / FIELDS;
+                bool is_stock_play = m.is_from_stock();
+                int node_type = is_stock_play ? 1 : 0;
+
+                out.push_back(parent);
+                out.push_back(static_cast<int>(m.source));
+                out.push_back(static_cast<int>(m.target));
+                out.push_back(static_cast<int>(card));
+                out.push_back(node_type);
+
+                // If stock play, it's terminal (stock card cleared, next card unknown)
+                if (is_stock_play) continue;
+
+                // Apply move and continue tree
+                GameState next = cur_state;
+                Game::apply_move_to_state(next, m);
+
+                // If hand is empty after this move, it's a hand-empty terminal
+                if (next.players[cp].hand_count == 0) {
+                    // Mark this node as hand_empty (type 3) instead of regular build
+                    out[my_idx * FIELDS + 4] = 3;
+                    continue;
+                }
+
+                // Dedup by state hash
+                uint64_t h = 0;
+                for (int b = 0; b < NUM_BUILDING_PILES; b++) h = h * 31 + next.building_pile_count[b];
+                const auto& np = next.players[cp];
+                Card sh[HAND_SIZE]; int hn = np.hand_count;
+                for (int x = 0; x < hn; x++) sh[x] = np.hand[x];
+                std::sort(sh, sh + hn);
+                for (int x = 0; x < hn; x++) h = h * 31 + sh[x];
+                h = h * 31 + hn + np.stock_size() * 1000;
+                for (int d = 0; d < NUM_DISCARD_PILES; d++)
+                    h = h * 31 + (np.discard_empty(d) ? 255 : np.discard_top(d));
+
+                if (!visited.count(h)) {
+                    visited.insert(h);
+                    queue.push({next, my_idx});
+                }
+            }
+
+            // Add discard option nodes (always terminal)
+            // Collapse: group by (card, pile_content_hash)
+            {
+                struct Key { Card card; uint64_t ph; };
+                MoveList collapsed;
+                Key seen[64]; int sc = 0;
+                for (int i = 0; i < discard_moves.size(); i++) {
+                    const auto& m = discard_moves[i];
+                    Card card = cur_state.players[cp].hand[m.hand_index()];
+                    int di = m.target_discard_index();
+                    const auto& dp = cur_state.players[cp].discard_piles[di];
+                    uint64_t ph = dp.size();
+                    for (int x = 0; x < dp.size(); x++) ph = ph * 31 + dp[x];
+                    bool dup = false;
+                    for (int j = 0; j < sc; j++)
+                        if (seen[j].card == card && seen[j].ph == ph) { dup = true; break; }
+                    if (!dup) { seen[sc++] = {card, ph}; collapsed.push_back(m); }
+                }
+                discard_moves = collapsed;
+            }
+
+            for (int i = 0; i < discard_moves.size(); i++) {
+                if (static_cast<int>(out.size()) / FIELDS >= max_nodes) break;
+                const auto& m = discard_moves[i];
+                Card card = cur_state.players[cp].hand[m.hand_index()];
+                out.push_back(parent);
+                out.push_back(static_cast<int>(m.source));
+                out.push_back(static_cast<int>(m.target));
+                out.push_back(static_cast<int>(card));
+                out.push_back(2); // discard type
+            }
+        }
+
+        return out;
     }
 
     // Legacy: per-move analysis
@@ -240,6 +395,7 @@ inline std::vector<int> wasm_run_match(
                           uint64_t s) -> std::unique_ptr<Player> {
         switch (type) {
             case 1: return std::make_unique<HeuristicPlayer>();
+            case 3: return std::make_unique<HeuristicRandomDiscardPlayer>();
             case 2: {
                 MCTSConfig cfg;
                 cfg.iterations_per_det = iters;

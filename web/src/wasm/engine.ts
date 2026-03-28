@@ -35,6 +35,7 @@ export interface GameController {
   passTurn(): void;
   analyzeMoves(iterations: number, determinizations: number, turnDepth: number): VectorInt;
   analyzeChains(iterations: number, determinizations: number, turnDepth: number): VectorInt;
+  getMoveTree(): VectorInt;
   delete(): void;
 }
 

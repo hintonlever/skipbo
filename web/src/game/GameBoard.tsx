@@ -391,7 +391,7 @@ export function GameBoard({ engine }: GameBoardProps) {
                     {builds.map((m, j) => (
                       <span key={j}>
                         {j > 0 && <span style={{ color: '#d1d5db' }}> → </span>}
-                        <span style={{ fontWeight: 500 }}>{sourceLabel(m.source as MoveSource, snapshot)}</span>
+                        <span style={{ fontWeight: 500 }}>{cardToString(m.card)}</span>
                         <span style={{ color: '#9ca3af' }}>→</span>
                         <span>{targetLabel(m.target as MoveTarget, snapshot)}</span>
                       </span>
@@ -400,7 +400,7 @@ export function GameBoard({ engine }: GameBoardProps) {
                 )}
                 {disc && (
                   <div style={{ fontSize: '11px', color: '#7c3aed', marginTop: 1 }}>
-                    Discard: {sourceLabel(disc.source as MoveSource, snapshot)} → {targetLabel(disc.target as MoveTarget, snapshot)}
+                    Discard: {cardToString(disc.card)} → {targetLabel(disc.target as MoveTarget, snapshot)}
                   </div>
                 )}
               </div>

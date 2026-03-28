@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MatchJob } from './matchWorker';
 
-// AI type codes matching C++ enum: 0=random, 1=heuristic, 2=mcts
+// AI type codes matching C++ enum: 0=random, 1=heuristic, 2=mcts, 3=heuristic_random_discard
 interface AISpec {
   name: string;
   type: number;
@@ -13,6 +13,7 @@ interface AISpec {
 const DEFAULT_PARTICIPANTS: AISpec[] = [
   { name: 'Random',      type: 0, iters: 0,     dets: 0,  turnDepth: 0 },
   { name: 'Heuristic',   type: 1, iters: 0,     dets: 0,  turnDepth: 0 },
+  { name: 'Heur+RandDiscard', type: 3, iters: 0, dets: 0, turnDepth: 0 },
   { name: 'MCTS Easy',   type: 2, iters: 50,    dets: 3,  turnDepth: 2 },
   { name: 'MCTS Medium', type: 2, iters: 300,   dets: 10, turnDepth: 3 },
   { name: 'MCTS Hard',   type: 2, iters: 2000,  dets: 20, turnDepth: 4 },
@@ -45,10 +46,10 @@ function eloUpdate(ratings: EloRating[], winner: number, loser: number) {
 const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 8);
 
 function chipBg(type: number): string {
-  return type === 0 ? '#fee2e2' : type === 1 ? '#dbeafe' : '#dcfce7';
+  return type === 0 ? '#fee2e2' : type === 1 ? '#dbeafe' : type === 3 ? '#fef3c7' : '#dcfce7';
 }
 function chipColor(type: number): string {
-  return type === 0 ? '#991b1b' : type === 1 ? '#1e40af' : '#166534';
+  return type === 0 ? '#991b1b' : type === 1 ? '#1e40af' : type === 3 ? '#92400e' : '#166534';
 }
 
 export function TournamentPage() {

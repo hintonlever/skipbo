@@ -12,9 +12,13 @@ namespace skipbo {
 struct TurnAction {
     static constexpr int MAX_MOVES = 32;
     Move moves[MAX_MOVES];
+    Card cards[MAX_MOVES]; // actual card value for each move (resolved at generation time)
     int num_moves = 0;
 
-    void add(const Move& m) { moves[num_moves++] = m; }
+    void add(const Move& m, Card card = CARD_NONE) {
+        cards[num_moves] = card;
+        moves[num_moves++] = m;
+    }
     bool has_discard() const { return num_moves > 0 && moves[num_moves - 1].is_discard(); }
     int num_builds() const { return has_discard() ? num_moves - 1 : num_moves; }
     const Move& discard() const { return moves[num_moves - 1]; }

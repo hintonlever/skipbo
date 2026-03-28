@@ -72,14 +72,19 @@ export function parseAnalysis(flat: number[]): MoveWithAnalysis[] {
   return result;
 }
 
-// Chain analysis: a complete turn action (builds + discard) with MCTS evaluation
-export interface ChainAnalysis {
-  moves: Move[];      // ordered sequence: build moves then discard
-  visits: number;
-  reward: number;     // avg reward from root player's perspective
+// A move in a chain with its resolved card value
+export interface ChainMove extends Move {
+  card: number; // actual card value resolved at generation time (0=SB, 1-12=numbered)
 }
 
-// Parse flat chain array from WASM: [numChains, numMoves1, src, tgt, ..., visits, reward*1000, ...]
+// Chain analysis: a complete turn action (builds + discard) with MCTS evaluation
+export interface ChainAnalysis {
+  moves: ChainMove[];  // ordered sequence: build moves then discard
+  visits: number;
+  reward: number;      // avg reward from root player's perspective
+}
+
+// Parse flat chain array from WASM: [numChains, numMoves1, src, tgt, card, ..., visits, reward*1000, ...]
 export function parseChains(flat: number[]): ChainAnalysis[] {
   if (flat.length === 0) return [];
   const numChains = flat[0];
@@ -87,10 +92,14 @@ export function parseChains(flat: number[]): ChainAnalysis[] {
   let idx = 1;
   for (let c = 0; c < numChains && idx < flat.length; c++) {
     const numMoves = flat[idx++];
-    const moves: Move[] = [];
-    for (let m = 0; m < numMoves && idx + 1 < flat.length; m++) {
-      moves.push({ source: flat[idx] as MoveSource, target: flat[idx + 1] as MoveTarget });
-      idx += 2;
+    const moves: ChainMove[] = [];
+    for (let m = 0; m < numMoves && idx + 2 < flat.length; m++) {
+      moves.push({
+        source: flat[idx] as MoveSource,
+        target: flat[idx + 1] as MoveTarget,
+        card: flat[idx + 2],
+      });
+      idx += 3;
     }
     const visits = flat[idx++];
     const reward = flat[idx++] / 1000;
@@ -99,41 +108,36 @@ export function parseChains(flat: number[]): ChainAnalysis[] {
   return result;
 }
 
-// MCTS tree node for visualization
-export interface TreeNode {
+// Move tree node for game tree visualization
+// nodeType: 0=build, 1=stock_play (terminal), 2=discard (terminal), 3=hand_empty (terminal)
+export interface MoveTreeNode {
   index: number;
   parentIndex: number;
   source: number;
   target: number;
-  visits: number;
-  avgReward: number;  // always from root player's perspective
-  actingPlayer: number;  // 0 = you, 1 = opponent
-  children: TreeNode[];
+  card: number;
+  nodeType: number;
+  children: MoveTreeNode[];
 }
 
-// Parse flat tree array [parentIdx, source, target, visits, avgReward*1000, actingPlayer, ...] into a tree
-export function parseTree(flat: number[]): TreeNode | null {
-  if (flat.length < 6) return null;
-
-  const nodes: TreeNode[] = [];
-  for (let i = 0; i < flat.length; i += 6) {
+export function parseMoveTree(flat: number[]): MoveTreeNode | null {
+  if (flat.length < 5) return null;
+  const FIELDS = 5;
+  const nodes: MoveTreeNode[] = [];
+  for (let i = 0; i < flat.length; i += FIELDS) {
     nodes.push({
-      index: i / 6,
+      index: i / FIELDS,
       parentIndex: flat[i],
       source: flat[i + 1],
       target: flat[i + 2],
-      visits: flat[i + 3],
-      avgReward: flat[i + 4] / 1000,
-      actingPlayer: flat[i + 5],
+      card: flat[i + 3],
+      nodeType: flat[i + 4],
       children: [],
     });
   }
-
-  // Build tree by linking children to parents
   for (let i = 1; i < nodes.length; i++) {
     const parent = nodes[nodes[i].parentIndex];
     if (parent) parent.children.push(nodes[i]);
   }
-
   return nodes[0];
 }
