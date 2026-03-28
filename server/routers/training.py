@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from ..models.training_loop import train, TrainingConfig, EpochResult
+from ..models.training_loop import train, TrainingConfig, EpochResult, DatasetStats, SanityStats
 from ..utils.storage import DATASETS_DIR, GENERATIONS_DIR, get_dataset
 
 router = APIRouter(prefix="/api/training", tags=["training"])
@@ -38,6 +38,14 @@ def _run_training(dataset_dirs: list[Path], generation_name: str, config: Traini
     try:
         count = 0
         for result in train(dataset_dirs, generation_name, GENERATIONS_DIR, config, _stop_flag):
+            if isinstance(result, DatasetStats):
+                _results.append(result)
+                _new_result_event.set()
+                continue
+            if isinstance(result, SanityStats):
+                _results.append(result)
+                _new_result_event.set()
+                continue
             _results.append(result)
             _status["epoch"] = result.epoch
             _new_result_event.set()
@@ -126,13 +134,35 @@ async def stream_progress():
             # Send any new results
             while last_sent < len(_results):
                 r = _results[last_sent]
-                data = json.dumps({
-                    "epoch": r.epoch,
-                    "policy_loss": round(r.policy_loss, 6),
-                    "value_loss": round(r.value_loss, 6),
-                    "total_loss": round(r.total_loss, 6),
-                })
-                yield f"event: epoch\ndata: {data}\n\n"
+                if isinstance(r, DatasetStats):
+                    data = json.dumps({
+                        "total_records": r.total_records,
+                        "kept": r.kept,
+                        "dropped_unmatched": r.dropped_unmatched,
+                        "dropped_out_of_range": r.dropped_out_of_range,
+                        "outcome_mean": round(r.outcome_mean, 4),
+                        "wins": r.wins,
+                        "losses": r.losses,
+                    })
+                    yield f"event: dataset_stats\ndata: {data}\n\n"
+                elif isinstance(r, SanityStats):
+                    data = json.dumps({
+                        "value_mean": round(r.value_mean, 4),
+                        "value_std": round(r.value_std, 4),
+                        "value_min": round(r.value_min, 4),
+                        "value_max": round(r.value_max, 4),
+                        "outcome_mean": round(r.outcome_mean, 4),
+                        "sign_agreement": round(r.sign_agreement, 4),
+                    })
+                    yield f"event: sanity_stats\ndata: {data}\n\n"
+                else:
+                    data = json.dumps({
+                        "epoch": r.epoch,
+                        "policy_loss": round(r.policy_loss, 6),
+                        "value_loss": round(r.value_loss, 6),
+                        "total_loss": round(r.total_loss, 6),
+                    })
+                    yield f"event: epoch\ndata: {data}\n\n"
                 last_sent += 1
 
             if not _status["running"]:

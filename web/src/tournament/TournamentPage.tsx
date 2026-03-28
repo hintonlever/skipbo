@@ -3,7 +3,9 @@ import type { MatchJob } from './matchWorker';
 import type { GenerationMeta, GenerationWeights } from '../training/types';
 import * as api from '../training/api';
 
-// AI type codes matching C++ enum: 0=random, 1=heuristic, 2=mcts, 3=heuristic_random_discard, 4=nn-mcts
+// AI type codes matching C++ enum:
+// 0=random, 1=heuristic, 2=mcts, 3=heuristic_random_discard,
+// 4=nn-mcts (value+policy), 5=nn-policy-only, 6=nn-mcts-value-only
 interface AISpec {
   name: string;
   type: number;
@@ -48,11 +50,11 @@ function eloUpdate(ratings: EloRating[], winner: number, loser: number) {
 const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 8);
 
 function chipBg(type: number): string {
-  if (type === 4) return '#f3e8ff';
+  if (type === 4 || type === 5 || type === 6) return '#f3e8ff';
   return type === 0 ? '#fee2e2' : type === 1 ? '#dbeafe' : type === 3 ? '#fef3c7' : '#dcfce7';
 }
 function chipColor(type: number): string {
-  if (type === 4) return '#7c3aed';
+  if (type === 4 || type === 5 || type === 6) return '#7c3aed';
   return type === 0 ? '#991b1b' : type === 1 ? '#1e40af' : type === 3 ? '#92400e' : '#166534';
 }
 
@@ -76,18 +78,24 @@ export function TournamentPage() {
     api.listGenerations().then(setGenerations).catch(() => {});
   }, []);
 
-  const addNNParticipant = useCallback(async (gen: GenerationMeta) => {
-    // Check if already added
-    if (participants.some(p => p.name === `NN: ${gen.name}`)) return;
+  const NN_MODES = [
+    { type: 4, label: 'V+P MCTS', suffix: 'MCTS' },
+    { type: 5, label: 'Policy Only', suffix: 'Policy' },
+    { type: 6, label: 'Value MCTS', suffix: 'ValMCTS' },
+  ] as const;
+
+  const addNNParticipant = useCallback(async (gen: GenerationMeta, mode: typeof NN_MODES[number]) => {
+    const name = `NN ${mode.suffix}: ${gen.name}`;
+    if (participants.some(p => p.name === name)) return;
     try {
       const weights = await api.getWeights(gen.name);
       setNnWeightsCache(weights);
       const newSpec: AISpec = {
-        name: `NN: ${gen.name}`,
-        type: 4,
-        iters: 500,
-        dets: 20,
-        turnDepth: 4,
+        name,
+        type: mode.type,
+        iters: mode.type === 5 ? 0 : 500,
+        dets: mode.type === 5 ? 0 : 20,
+        turnDepth: mode.type === 5 ? 0 : 4,
       };
       setParticipants(prev => [...prev, newSpec]);
       setSelected(prev => [...prev, true]);
@@ -192,7 +200,7 @@ export function TournamentPage() {
     }
 
     // Check if any selected participant is NN (type 4)
-    const hasNN = indices.some(i => participants[i].type === 4);
+    const hasNN = indices.some(i => [4, 5, 6].includes(participants[i].type));
 
     // Spawn workers
     const workers: Worker[] = [];
@@ -292,7 +300,7 @@ export function TournamentPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {participants.map((ai, idx) => {
             const active = selected[idx];
-            const isMCTS = ai.type === 2 || ai.type === 4;
+            const isMCTS = ai.type === 2 || ai.type === 4 || ai.type === 6;
             const inputStyle = {
               width: 60, padding: '2px 4px', borderRadius: 4,
               border: '1px solid #d1d5db', fontSize: '12px',
@@ -357,27 +365,34 @@ export function TournamentPage() {
 
         {/* Add NN generation */}
         {generations.length > 0 && (
-          <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, color: '#6b7280' }}>Add trained AI:</span>
-            {generations.map(gen => {
-              const alreadyAdded = participants.some(p => p.name === `NN: ${gen.name}`);
-              return (
-                <button
-                  key={gen.name}
-                  onClick={() => !alreadyAdded && !isRunning && addNNParticipant(gen)}
-                  disabled={alreadyAdded || isRunning}
-                  style={{
-                    padding: '3px 10px', fontSize: 12, fontWeight: 600,
-                    borderRadius: 12, border: '1px solid #c4b5fd', cursor: alreadyAdded || isRunning ? 'default' : 'pointer',
-                    backgroundColor: alreadyAdded ? '#ede9fe' : '#f5f3ff',
-                    color: alreadyAdded ? '#a78bfa' : '#7c3aed',
-                    opacity: alreadyAdded ? 0.6 : 1,
-                  }}
-                >
-                  {alreadyAdded ? `${gen.name} (added)` : `+ ${gen.name}`}
-                </button>
-              );
-            })}
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: '#6b7280', paddingTop: 4 }}>Add trained AI:</span>
+            {generations.map(gen => (
+              <div key={gen.name} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: '#7c3aed' }}>{gen.name}:</span>
+                {NN_MODES.map(mode => {
+                  const name = `NN ${mode.suffix}: ${gen.name}`;
+                  const alreadyAdded = participants.some(p => p.name === name);
+                  return (
+                    <button
+                      key={mode.type}
+                      onClick={() => !alreadyAdded && !isRunning && addNNParticipant(gen, mode)}
+                      disabled={alreadyAdded || isRunning}
+                      style={{
+                        padding: '2px 8px', fontSize: 11, fontWeight: 600,
+                        borderRadius: 10, border: '1px solid #c4b5fd',
+                        cursor: alreadyAdded || isRunning ? 'default' : 'pointer',
+                        backgroundColor: alreadyAdded ? '#ede9fe' : '#f5f3ff',
+                        color: alreadyAdded ? '#a78bfa' : '#7c3aed',
+                        opacity: alreadyAdded ? 0.6 : 1,
+                      }}
+                    >
+                      {alreadyAdded ? mode.label : `+ ${mode.label}`}
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         )}
       </div>

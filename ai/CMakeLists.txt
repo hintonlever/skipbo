@@ -9,6 +9,7 @@ add_library(skipbo_ai STATIC
     src/nn_encoding.cpp
     src/neural_net.cpp
     src/nn_mcts_player.cpp
+    src/nn_policy_player.cpp
 )
 target_include_directories(skipbo_ai PUBLIC include)
 target_link_libraries(skipbo_ai PUBLIC skipbo_engine)

@@ -28,6 +28,27 @@ class TrainingConfig:
 
 
 @dataclass
+class DatasetStats:
+    total_records: int
+    kept: int
+    dropped_unmatched: int
+    dropped_out_of_range: int
+    outcome_mean: float
+    wins: int
+    losses: int
+
+
+@dataclass
+class SanityStats:
+    value_mean: float
+    value_std: float
+    value_min: float
+    value_max: float
+    outcome_mean: float
+    sign_agreement: float
+
+
+@dataclass
 class EpochResult:
     epoch: int
     policy_loss: float
@@ -45,6 +66,10 @@ class SkipBoDataset(Dataset):
         self.chosen: list[int] = []
         self.outcomes: list[float] = []
 
+        total_records = 0
+        dropped_unmatched = 0
+        dropped_out_of_range = 0
+
         for d in dataset_dirs:
             games_dir = d / "games"
             if not games_dir.exists():
@@ -53,6 +78,7 @@ class SkipBoDataset(Dataset):
                 data = np.load(f)
                 n = len(data["outcome"])
                 for i in range(n):
+                    total_records += 1
                     state = data["state"][i]  # (STATE_SIZE,)
                     chains_i = data["chains"][i]  # (max_chains, CHAIN_SIZE)
                     mask_i = data["chain_mask"][i]  # (max_chains,)
@@ -61,9 +87,11 @@ class SkipBoDataset(Dataset):
 
                     # Skip records where chosen chain wasn't matched
                     if chosen_i < 0:
+                        dropped_unmatched += 1
                         continue
                     # Skip if chosen index is out of valid range
                     if chosen_i >= int(mask_i.sum()):
+                        dropped_out_of_range += 1
                         continue
 
                     self.states.append(state)
@@ -71,6 +99,15 @@ class SkipBoDataset(Dataset):
                     self.chain_masks.append(mask_i)
                     self.chosen.append(chosen_i)
                     self.outcomes.append(outcome_i)
+
+        self.load_stats = {
+            "total_records": total_records,
+            "kept": len(self.states),
+            "dropped_unmatched": dropped_unmatched,
+            "dropped_out_of_range": dropped_out_of_range,
+        }
+        print(f"[dataset] {total_records} total records, {len(self.states)} kept, "
+              f"{dropped_unmatched} dropped (unmatched), {dropped_out_of_range} dropped (out of range)")
 
     def __len__(self) -> int:
         return len(self.states)
@@ -91,8 +128,8 @@ def train(
     output_dir: Path,
     config: TrainingConfig,
     stop_flag: list[bool] | None = None,
-) -> Generator[EpochResult, None, None]:
-    """Train value and policy networks. Yields EpochResult per epoch."""
+) -> Generator[EpochResult | DatasetStats | SanityStats, None, None]:
+    """Train value and policy networks. Yields DatasetStats, then EpochResult per epoch, then SanityStats."""
 
     device = torch.device("cpu")  # Skip-Bo networks are tiny, CPU is fine
 
@@ -101,6 +138,17 @@ def train(
     if len(dataset) == 0:
         print("[training] No valid samples — check that chosen_idx != -1 in the data")
         return
+
+    # Log outcome distribution and yield dataset stats
+    outcomes = np.array(dataset.outcomes)
+    print(f"[training] Outcome distribution: mean={outcomes.mean():.3f}, "
+          f"wins={int((outcomes > 0).sum())}, losses={int((outcomes < 0).sum())}")
+    yield DatasetStats(
+        **dataset.load_stats,
+        outcome_mean=float(outcomes.mean()),
+        wins=int((outcomes > 0).sum()),
+        losses=int((outcomes < 0).sum()),
+    )
 
     loader = DataLoader(
         dataset,
@@ -175,6 +223,33 @@ def train(
             total_loss=avg_p + avg_v,
         )
         yield result
+
+    # Value network sanity check: evaluate on a sample of training data
+    value_net.eval()
+    with torch.no_grad():
+        sample_size = min(1000, len(dataset))
+        sample_states = torch.stack([dataset[i]["state"] for i in range(sample_size)])
+        sample_outcomes = torch.tensor([dataset.outcomes[i] for i in range(sample_size)])
+        sample_preds = value_net(sample_states).squeeze(-1)
+
+        pred_np = sample_preds.numpy()
+        print(f"[sanity] Value network outputs on {sample_size} training samples:")
+        print(f"[sanity]   mean={pred_np.mean():.4f}, std={pred_np.std():.4f}, "
+              f"min={pred_np.min():.4f}, max={pred_np.max():.4f}")
+        print(f"[sanity]   Actual outcomes: mean={sample_outcomes.numpy().mean():.4f}")
+
+        # Check sign agreement (does the network at least get the direction right?)
+        sign_agree = ((pred_np > 0) == (sample_outcomes.numpy() > 0)).mean()
+        print(f"[sanity]   Sign agreement (pred vs actual): {sign_agree:.1%}")
+
+    yield SanityStats(
+        value_mean=float(pred_np.mean()),
+        value_std=float(pred_np.std()),
+        value_min=float(pred_np.min()),
+        value_max=float(pred_np.max()),
+        outcome_mean=float(sample_outcomes.numpy().mean()),
+        sign_agreement=float(sign_agree),
+    )
 
     # Save models and export weights
     gen_dir = output_dir / generation_name

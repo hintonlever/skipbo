@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { GENERATION_NAMES, type EpochEvent, type GenerationMeta } from './types';
+import { GENERATION_NAMES, type EpochEvent, type GenerationMeta, type DatasetStatsEvent, type SanityStatsEvent } from './types';
 import { LossCurve } from './LossCurve';
 import * as api from './api';
 
@@ -20,6 +20,8 @@ export function TrainingPanel({ selectedDatasetIds, generations, onTrainingCompl
   const [training, setTraining] = useState(false);
   const [lossData, setLossData] = useState<EpochEvent[]>([]);
   const [currentEpoch, setCurrentEpoch] = useState(0);
+  const [datasetStats, setDatasetStats] = useState<DatasetStatsEvent | null>(null);
+  const [sanityStats, setSanityStats] = useState<SanityStatsEvent | null>(null);
   const closeStreamRef = useRef<(() => void) | null>(null);
 
   // Update suggested name when generations change
@@ -35,6 +37,8 @@ export function TrainingPanel({ selectedDatasetIds, generations, onTrainingCompl
     setTraining(true);
     setLossData([]);
     setCurrentEpoch(0);
+    setDatasetStats(null);
+    setSanityStats(null);
 
     await api.startTraining({
       dataset_ids: Array.from(selectedDatasetIds),
@@ -60,6 +64,8 @@ export function TrainingPanel({ selectedDatasetIds, generations, onTrainingCompl
         console.error('Training stream error:', err);
         setTraining(false);
       },
+      (ds) => setDatasetStats(ds),
+      (ss) => setSanityStats(ss),
     );
   }, [selectedDatasetIds, genName, epochs, batchSize, lr, onTrainingComplete]);
 
@@ -148,6 +154,44 @@ export function TrainingPanel({ selectedDatasetIds, generations, onTrainingCompl
           Epoch {currentEpoch}/{epochs}
           {' | '}Policy: {lastLoss.policy_loss.toFixed(4)}
           {' | '}Value: {lastLoss.value_loss.toFixed(4)}
+        </div>
+      )}
+
+      {datasetStats && (
+        <div style={{
+          marginTop: 12, padding: 10, backgroundColor: '#f0fdf4', borderRadius: 6,
+          border: '1px solid #bbf7d0', fontSize: 12,
+        }}>
+          <div style={{ fontWeight: 600, marginBottom: 4, color: '#166534' }}>Dataset Stats</div>
+          <div>Records: {datasetStats.kept.toLocaleString()} kept / {datasetStats.total_records.toLocaleString()} total</div>
+          {datasetStats.dropped_unmatched > 0 && (
+            <div style={{ color: '#dc2626' }}>
+              Dropped (unmatched chain): {datasetStats.dropped_unmatched.toLocaleString()}
+              {' '}({(datasetStats.dropped_unmatched / datasetStats.total_records * 100).toFixed(1)}%)
+            </div>
+          )}
+          {datasetStats.dropped_out_of_range > 0 && (
+            <div style={{ color: '#dc2626' }}>
+              Dropped (out of range): {datasetStats.dropped_out_of_range.toLocaleString()}
+            </div>
+          )}
+          <div>Outcomes: {datasetStats.wins} wins, {datasetStats.losses} losses (mean: {datasetStats.outcome_mean.toFixed(3)})</div>
+        </div>
+      )}
+
+      {sanityStats && (
+        <div style={{
+          marginTop: 8, padding: 10, borderRadius: 6, fontSize: 12,
+          backgroundColor: sanityStats.sign_agreement < 0.55 ? '#fef2f2' : '#f0fdf4',
+          border: `1px solid ${sanityStats.sign_agreement < 0.55 ? '#fecaca' : '#bbf7d0'}`,
+        }}>
+          <div style={{ fontWeight: 600, marginBottom: 4, color: sanityStats.sign_agreement < 0.55 ? '#dc2626' : '#166534' }}>
+            Value Network Sanity Check
+          </div>
+          <div>Outputs: mean={sanityStats.value_mean.toFixed(4)}, std={sanityStats.value_std.toFixed(4)}, range=[{sanityStats.value_min.toFixed(4)}, {sanityStats.value_max.toFixed(4)}]</div>
+          <div>Sign agreement: {(sanityStats.sign_agreement * 100).toFixed(1)}%
+            {sanityStats.sign_agreement < 0.55 && ' (near random - value network may not be learning)'}
+          </div>
         </div>
       )}
     </div>

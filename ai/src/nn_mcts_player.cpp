@@ -122,8 +122,13 @@ std::vector<ChainAnalysis> NNMCTSPlayer::analyze_chains(
                      root_chain_encs.data() + i * CHAIN_ENCODING_SIZE);
     }
     std::vector<float> root_priors(num_root);
-    nn_.evaluate_policy_batch(root_state_enc, root_chain_encs.data(),
-                              num_root, root_priors.data());
+    if (config_.use_policy && nn_.has_policy_network()) {
+        nn_.evaluate_policy_batch(root_state_enc, root_chain_encs.data(),
+                                  num_root, root_priors.data());
+    } else {
+        float uniform = 1.0f / num_root;
+        std::fill(root_priors.begin(), root_priors.end(), uniform);
+    }
 
     // Accumulate rewards across determinizations
     std::vector<double> agg_reward(root_actions.size(), 0.0);
@@ -163,7 +168,7 @@ std::vector<ChainAnalysis> NNMCTSPlayer::analyze_chains(
                     node->actions = generate_turn_actions(sim, rng_, 8);
                     node->actions_generated = true;
                     // Compute priors for non-root nodes
-                    if (nn_.has_policy_network()) {
+                    if (config_.use_policy && nn_.has_policy_network()) {
                         compute_priors(nn_, sim, node);
                     }
                 }

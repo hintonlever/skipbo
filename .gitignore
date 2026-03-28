@@ -13,6 +13,7 @@ web/public/wasm/*.wasm
 
 # Python
 server/venv/
+venv/
 __pycache__/
 *.pyc
 

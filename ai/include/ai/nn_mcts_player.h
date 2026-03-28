@@ -15,6 +15,7 @@ struct NNMCTSConfig {
     int iterations_per_det = 500;
     double c_puct = 2.5;       // PUCT exploration constant
     int max_turn_depth = 4;    // max turns per player in tree
+    bool use_policy = true;    // false = uniform priors (value-only MCTS)
 };
 
 class NNMCTSPlayer : public Player {

@@ -7,6 +7,7 @@
 #include "ai/heuristic_random_discard_player.h"
 #include "ai/mcts_player.h"
 #include "ai/nn_mcts_player.h"
+#include "ai/nn_policy_player.h"
 #include "ai/nn_encoding.h"
 #include <vector>
 #include <random>
@@ -453,7 +454,9 @@ inline bool wasm_has_nn_weights() {
     return global_nn().has_value_network() && global_nn().has_policy_network();
 }
 
-// Run a single AI vs AI match. aiType: 0=random, 1=heuristic, 2=mcts, 3=heur+rand_discard, 4=nn-mcts
+// Run a single AI vs AI match.
+// aiType: 0=random, 1=heuristic, 2=mcts, 3=heur+rand_discard,
+//         4=nn-mcts (value+policy), 5=nn-policy-only, 6=nn-mcts-value-only
 // Returns [winner, turns, p0StockRemaining, p1StockRemaining]
 inline std::vector<int> wasm_run_match(
     int p0Type, int p0Iters, int p0Dets, int p0Heuristic, int p0Rollout, int p0Tree,
@@ -478,6 +481,20 @@ inline std::vector<int> wasm_run_match(
                 cfg.iterations_per_det = iters;
                 cfg.num_determinizations = dets;
                 cfg.max_turn_depth = tree;
+                cfg.use_policy = true;
+                (void)heuristic; (void)rollout;
+                return std::make_unique<NNMCTSPlayer>(s, cfg, global_nn());
+            }
+            case 5: {
+                (void)iters; (void)dets; (void)tree; (void)heuristic; (void)rollout;
+                return std::make_unique<NNPolicyPlayer>(s, global_nn());
+            }
+            case 6: {
+                NNMCTSConfig cfg;
+                cfg.iterations_per_det = iters;
+                cfg.num_determinizations = dets;
+                cfg.max_turn_depth = tree;
+                cfg.use_policy = false;
                 (void)heuristic; (void)rollout;
                 return std::make_unique<NNMCTSPlayer>(s, cfg, global_nn());
             }

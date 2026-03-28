@@ -50,6 +50,25 @@ export interface EpochEvent {
   total_loss: number;
 }
 
+export interface DatasetStatsEvent {
+  total_records: number;
+  kept: number;
+  dropped_unmatched: number;
+  dropped_out_of_range: number;
+  outcome_mean: number;
+  wins: number;
+  losses: number;
+}
+
+export interface SanityStatsEvent {
+  value_mean: number;
+  value_std: number;
+  value_min: number;
+  value_max: number;
+  outcome_mean: number;
+  sign_agreement: number;
+}
+
 export interface TrainingStatus {
   running: boolean;
   generation: string | null;

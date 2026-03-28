@@ -5,6 +5,8 @@ import type {
   TrainingConfig,
   TrainingRecord,
   EpochEvent,
+  DatasetStatsEvent,
+  SanityStatsEvent,
 } from './types';
 
 const BASE = '/api';
@@ -61,10 +63,18 @@ export function streamTraining(
   onEpoch: (e: EpochEvent) => void,
   onDone: () => void,
   onError: (err: string) => void,
+  onDatasetStats?: (e: DatasetStatsEvent) => void,
+  onSanityStats?: (e: SanityStatsEvent) => void,
 ): () => void {
   const es = new EventSource(`${BASE}/training/stream`);
   es.addEventListener('epoch', (e) => {
     onEpoch(JSON.parse(e.data));
+  });
+  es.addEventListener('dataset_stats', (e) => {
+    onDatasetStats?.(JSON.parse(e.data));
+  });
+  es.addEventListener('sanity_stats', (e) => {
+    onSanityStats?.(JSON.parse(e.data));
   });
   es.addEventListener('done', () => {
     onDone();
