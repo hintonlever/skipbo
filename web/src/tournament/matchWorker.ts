@@ -16,12 +16,22 @@ interface WasmVectorInt {
   delete(): void;
 }
 
+interface WasmVectorFloat {
+  size(): number;
+  get(i: number): number;
+  push_back(v: number): void;
+  delete(): void;
+}
+
 interface WasmModule {
+  VectorFloat: new () => WasmVectorFloat;
   runMatch(
     p0Type: number, p0Iters: number, p0Dets: number, p0Heuristic: number, p0Rollout: number, p0Tree: number,
     p1Type: number, p1Iters: number, p1Dets: number, p1Heuristic: number, p1Rollout: number, p1Tree: number,
     seed: number
   ): WasmVectorInt;
+  loadNNWeightsGlobal(valueWeights: WasmVectorFloat, policyWeights: WasmVectorFloat): void;
+  hasNNWeightsGlobal(): boolean;
 }
 
 let modulePromise: Promise<WasmModule> | null = null;
@@ -45,7 +55,21 @@ async function getModule(): Promise<WasmModule> {
 }
 
 self.onmessage = async (e: MessageEvent) => {
-  if (e.data.type === 'run') {
+  if (e.data.type === 'loadWeights') {
+    try {
+      const module = await getModule();
+      const vw = new module.VectorFloat();
+      const pw = new module.VectorFloat();
+      for (const v of e.data.valueWeights as number[]) vw.push_back(v);
+      for (const v of e.data.policyWeights as number[]) pw.push_back(v);
+      module.loadNNWeightsGlobal(vw, pw);
+      vw.delete();
+      pw.delete();
+      (self as unknown as Worker).postMessage({ type: 'weightsLoaded' });
+    } catch (err) {
+      (self as unknown as Worker).postMessage({ type: 'error', message: String(err) });
+    }
+  } else if (e.data.type === 'run') {
     try {
       const module = await getModule();
       const jobs: MatchJob[] = e.data.jobs;

@@ -10,6 +10,8 @@ EMSCRIPTEN_BINDINGS(skipbo) {
 
     function("runMatch", &skipbo::wasm_run_match);
     function("runMatchLogged", &skipbo::wasm_run_match_logged);
+    function("loadNNWeightsGlobal", &skipbo::wasm_load_nn_weights);
+    function("hasNNWeightsGlobal", &skipbo::wasm_has_nn_weights);
 
     class_<WasmGameController>("GameController")
         .constructor<int>()

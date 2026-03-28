@@ -1,7 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { MatchJob } from './matchWorker';
+import type { GenerationMeta, GenerationWeights } from '../training/types';
+import * as api from '../training/api';
 
-// AI type codes matching C++ enum: 0=random, 1=heuristic, 2=mcts, 3=heuristic_random_discard
+// AI type codes matching C++ enum: 0=random, 1=heuristic, 2=mcts, 3=heuristic_random_discard, 4=nn-mcts
 interface AISpec {
   name: string;
   type: number;
@@ -46,9 +48,11 @@ function eloUpdate(ratings: EloRating[], winner: number, loser: number) {
 const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 8);
 
 function chipBg(type: number): string {
+  if (type === 4) return '#f3e8ff';
   return type === 0 ? '#fee2e2' : type === 1 ? '#dbeafe' : type === 3 ? '#fef3c7' : '#dcfce7';
 }
 function chipColor(type: number): string {
+  if (type === 4) return '#7c3aed';
   return type === 0 ? '#991b1b' : type === 1 ? '#1e40af' : type === 3 ? '#92400e' : '#166534';
 }
 
@@ -62,8 +66,35 @@ export function TournamentPage() {
   const [totalMatches, setTotalMatches] = useState(0);
   const [results, setResults] = useState<PairResult[][] | null>(null);
   const [elos, setElos] = useState<EloRating[] | null>(null);
+  const [generations, setGenerations] = useState<GenerationMeta[]>([]);
+  const [nnWeightsCache, setNnWeightsCache] = useState<GenerationWeights | null>(null);
   const workersRef = useRef<Worker[]>([]);
   const cancelRef = useRef(false);
+
+  // Fetch available NN generations
+  useEffect(() => {
+    api.listGenerations().then(setGenerations).catch(() => {});
+  }, []);
+
+  const addNNParticipant = useCallback(async (gen: GenerationMeta) => {
+    // Check if already added
+    if (participants.some(p => p.name === `NN: ${gen.name}`)) return;
+    try {
+      const weights = await api.getWeights(gen.name);
+      setNnWeightsCache(weights);
+      const newSpec: AISpec = {
+        name: `NN: ${gen.name}`,
+        type: 4,
+        iters: 500,
+        dets: 20,
+        turnDepth: 4,
+      };
+      setParticipants(prev => [...prev, newSpec]);
+      setSelected(prev => [...prev, true]);
+    } catch (e) {
+      console.error('Failed to load NN weights:', e);
+    }
+  }, [participants]);
 
   const updateParticipant = (idx: number, field: keyof AISpec, value: number) => {
     setParticipants(prev => prev.map((p, i) => i === idx ? { ...p, [field]: value } : p));
@@ -160,6 +191,9 @@ export function TournamentPage() {
       }
     }
 
+    // Check if any selected participant is NN (type 4)
+    const hasNN = indices.some(i => participants[i].type === 4);
+
     // Spawn workers
     const workers: Worker[] = [];
     for (let w = 0; w < NUM_WORKERS; w++) {
@@ -213,12 +247,29 @@ export function TournamentPage() {
         workersRef.current = [];
       };
 
-      worker.postMessage({ type: 'run', jobs: workerJobs[w].map(({ aiI, aiJ, p0Idx, p1Idx, ...job }) => job) });
+      // If NN players are involved, load weights first, then send jobs
+      const strippedJobs = workerJobs[w].map(({ aiI, aiJ, p0Idx, p1Idx, ...job }) => job);
+      if (hasNN && nnWeightsCache) {
+        const weightsHandler = (ev: MessageEvent) => {
+          if (ev.data.type === 'weightsLoaded') {
+            worker.removeEventListener('message', weightsHandler);
+            worker.postMessage({ type: 'run', jobs: strippedJobs });
+          }
+        };
+        worker.addEventListener('message', weightsHandler);
+        worker.postMessage({
+          type: 'loadWeights',
+          valueWeights: nnWeightsCache.value_network,
+          policyWeights: nnWeightsCache.policy_network,
+        });
+      } else {
+        worker.postMessage({ type: 'run', jobs: strippedJobs });
+      }
       workers.push(worker);
     }
 
     workersRef.current = workers;
-  }, [matchesPerPairing, selected, participants]);
+  }, [matchesPerPairing, selected, participants, nnWeightsCache]);
 
   const cancel = useCallback(() => {
     cancelRef.current = true;
@@ -241,7 +292,7 @@ export function TournamentPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {participants.map((ai, idx) => {
             const active = selected[idx];
-            const isMCTS = ai.type === 2;
+            const isMCTS = ai.type === 2 || ai.type === 4;
             const inputStyle = {
               width: 60, padding: '2px 4px', borderRadius: 4,
               border: '1px solid #d1d5db', fontSize: '12px',
@@ -302,6 +353,32 @@ export function TournamentPage() {
         </div>
         {selectedIndices.length < 2 && (
           <p style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>Select at least 2 participants.</p>
+        )}
+
+        {/* Add NN generation */}
+        {generations.length > 0 && (
+          <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, color: '#6b7280' }}>Add trained AI:</span>
+            {generations.map(gen => {
+              const alreadyAdded = participants.some(p => p.name === `NN: ${gen.name}`);
+              return (
+                <button
+                  key={gen.name}
+                  onClick={() => !alreadyAdded && !isRunning && addNNParticipant(gen)}
+                  disabled={alreadyAdded || isRunning}
+                  style={{
+                    padding: '3px 10px', fontSize: 12, fontWeight: 600,
+                    borderRadius: 12, border: '1px solid #c4b5fd', cursor: alreadyAdded || isRunning ? 'default' : 'pointer',
+                    backgroundColor: alreadyAdded ? '#ede9fe' : '#f5f3ff',
+                    color: alreadyAdded ? '#a78bfa' : '#7c3aed',
+                    opacity: alreadyAdded ? 0.6 : 1,
+                  }}
+                >
+                  {alreadyAdded ? `${gen.name} (added)` : `+ ${gen.name}`}
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
 
