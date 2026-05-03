@@ -1,5 +1,7 @@
 add_library(skipbo_ai STATIC
     src/random_player.cpp
+    src/rules_player.cpp
+    src/pimc_player.cpp
     src/heuristic_player.cpp
     src/heuristic_random_discard_player.cpp
     src/mcts_node.cpp

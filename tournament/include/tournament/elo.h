@@ -2,19 +2,23 @@
 
 namespace skipbo {
 
-struct EloRating {
-    double rating = 1500.0;
-    int games_played = 0;
+constexpr double ELO_ANCHOR_RATING = 1000.0;  // random baseline anchored here
+constexpr double ELO_K_FACTOR = 16.0;
 
-    double k_factor() const {
-        return games_played < 30 ? 40.0 : 20.0;
-    }
+struct EloRating {
+    double rating = ELO_ANCHOR_RATING;
+    int games_played = 0;
 };
 
-// Expected score for player a against player b
 double elo_expected(double rating_a, double rating_b);
 
-// Update ratings after a game. winner = 0 means a wins, 1 means b wins.
-void elo_update(EloRating& a, EloRating& b, int winner);
+// Update both ratings after one game. score_a in [0, 1]: 1=a wins, 0=b wins.
+void elo_update(EloRating& a, EloRating& b, double score_a);
+
+// Convenience: pass winner index (0 or 1).
+void elo_update_winner(EloRating& a, EloRating& b, int winner);
+
+// One-sided update: only `r` moves; `anchor_rating` is treated as fixed.
+void elo_update_against_anchor(EloRating& r, double anchor_rating, double score);
 
 } // namespace skipbo

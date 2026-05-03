@@ -1,3 +1,5 @@
+find_package(Threads REQUIRED)
+
 add_executable(skipbo_tournament
     main.cpp
     src/match.cpp
@@ -5,4 +7,4 @@ add_executable(skipbo_tournament
     src/tournament.cpp
 )
 target_include_directories(skipbo_tournament PRIVATE include)
-target_link_libraries(skipbo_tournament PRIVATE skipbo_engine skipbo_ai)
+target_link_libraries(skipbo_tournament PRIVATE skipbo_engine skipbo_ai Threads::Threads)
