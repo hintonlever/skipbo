@@ -5,7 +5,8 @@ import * as api from '../training/api';
 
 // AI type codes matching C++ enum:
 // 0=random, 1=heuristic, 2=mcts, 3=heuristic_random_discard,
-// 4=nn-mcts (value+policy), 5=nn-policy-only, 6=nn-mcts-value-only
+// 4=nn-mcts (value+policy), 5=nn-policy-only, 6=nn-mcts-value-only,
+// 7=ppo
 interface AISpec {
   name: string;
   type: number;
@@ -50,10 +51,12 @@ function eloUpdate(ratings: EloRating[], winner: number, loser: number) {
 const NUM_WORKERS = Math.min(navigator.hardwareConcurrency || 4, 8);
 
 function chipBg(type: number): string {
+  if (type === 7) return '#fef3c7';
   if (type === 4 || type === 5 || type === 6) return '#f3e8ff';
   return type === 0 ? '#fee2e2' : type === 1 ? '#dbeafe' : type === 3 ? '#fef3c7' : '#dcfce7';
 }
 function chipColor(type: number): string {
+  if (type === 7) return '#b45309';
   if (type === 4 || type === 5 || type === 6) return '#7c3aed';
   return type === 0 ? '#991b1b' : type === 1 ? '#1e40af' : type === 3 ? '#92400e' : '#166534';
 }
@@ -70,6 +73,8 @@ export function TournamentPage() {
   const [elos, setElos] = useState<EloRating[] | null>(null);
   const [generations, setGenerations] = useState<GenerationMeta[]>([]);
   const [nnWeightsCache, setNnWeightsCache] = useState<GenerationWeights | null>(null);
+  const [ppoWeights, setPpoWeights] = useState<number[] | null>(null);
+  const [ppoFileName, setPpoFileName] = useState<string | null>(null);
   const workersRef = useRef<Worker[]>([]);
   const cancelRef = useRef(false);
 
@@ -101,6 +106,27 @@ export function TournamentPage() {
       setSelected(prev => [...prev, true]);
     } catch (e) {
       console.error('Failed to load NN weights:', e);
+    }
+  }, [participants]);
+
+  const loadPPOWeights = useCallback(async (file: File) => {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.actor_network || !Array.isArray(data.actor_network)) {
+        console.error('Invalid PPO weights: missing actor_network');
+        return;
+      }
+      setPpoWeights(data.actor_network);
+      setPpoFileName(file.name);
+      // Add PPO participant if not already present
+      const name = `PPO: ${file.name.replace('.json', '')}`;
+      if (!participants.some(p => p.name === name)) {
+        setParticipants(prev => [...prev, { name, type: 7, iters: 0, dets: 0, turnDepth: 0 }]);
+        setSelected(prev => [...prev, true]);
+      }
+    } catch (e) {
+      console.error('Failed to load PPO weights:', e);
     }
   }, [participants]);
 
@@ -199,8 +225,9 @@ export function TournamentPage() {
       }
     }
 
-    // Check if any selected participant is NN (type 4)
+    // Check if any selected participant needs weights
     const hasNN = indices.some(i => [4, 5, 6].includes(participants[i].type));
+    const hasPPO = indices.some(i => participants[i].type === 7);
 
     // Spawn workers
     const workers: Worker[] = [];
@@ -255,13 +282,29 @@ export function TournamentPage() {
         workersRef.current = [];
       };
 
-      // If NN players are involved, load weights first, then send jobs
+      // Load weights then send jobs. Chain: NN weights -> PPO weights -> run.
       const strippedJobs = workerJobs[w].map(({ aiI, aiJ, p0Idx, p1Idx, ...job }) => job);
+
+      const startJobs = () => {
+        if (hasPPO && ppoWeights) {
+          const ppoHandler = (ev: MessageEvent) => {
+            if (ev.data.type === 'ppoWeightsLoaded') {
+              worker.removeEventListener('message', ppoHandler);
+              worker.postMessage({ type: 'run', jobs: strippedJobs });
+            }
+          };
+          worker.addEventListener('message', ppoHandler);
+          worker.postMessage({ type: 'loadPPOWeights', actorWeights: ppoWeights });
+        } else {
+          worker.postMessage({ type: 'run', jobs: strippedJobs });
+        }
+      };
+
       if (hasNN && nnWeightsCache) {
         const weightsHandler = (ev: MessageEvent) => {
           if (ev.data.type === 'weightsLoaded') {
             worker.removeEventListener('message', weightsHandler);
-            worker.postMessage({ type: 'run', jobs: strippedJobs });
+            startJobs();
           }
         };
         worker.addEventListener('message', weightsHandler);
@@ -271,13 +314,13 @@ export function TournamentPage() {
           policyWeights: nnWeightsCache.policy_network,
         });
       } else {
-        worker.postMessage({ type: 'run', jobs: strippedJobs });
+        startJobs();
       }
       workers.push(worker);
     }
 
     workersRef.current = workers;
-  }, [matchesPerPairing, selected, participants, nnWeightsCache]);
+  }, [matchesPerPairing, selected, participants, nnWeightsCache, ppoWeights]);
 
   const cancel = useCallback(() => {
     cancelRef.current = true;
@@ -362,6 +405,25 @@ export function TournamentPage() {
         {selectedIndices.length < 2 && (
           <p style={{ fontSize: 12, color: '#ef4444', marginTop: 4 }}>Select at least 2 participants.</p>
         )}
+
+        {/* Load PPO weights */}
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12, color: '#6b7280' }}>Add PPO agent:</span>
+          <label style={{
+            padding: '4px 12px', fontSize: 12, fontWeight: 600,
+            borderRadius: 10, border: '1px solid #fbbf24',
+            cursor: isRunning ? 'default' : 'pointer',
+            backgroundColor: '#fffbeb', color: '#b45309',
+          }}>
+            {ppoFileName ? `Loaded: ${ppoFileName}` : 'Load weights JSON'}
+            <input type="file" accept=".json" hidden disabled={isRunning}
+              onChange={e => {
+                const file = e.target.files?.[0];
+                if (file) loadPPOWeights(file);
+              }}
+            />
+          </label>
+        </div>
 
         {/* Add NN generation */}
         {generations.length > 0 && (

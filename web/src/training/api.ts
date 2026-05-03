@@ -96,5 +96,65 @@ export const getWeights = (name: string) =>
 export const deleteGeneration = (name: string) =>
   json('/generations/' + name, { method: 'DELETE' });
 
+// PPO Training
+export interface PPOConfig {
+  generation_name: string;
+  num_games: number;
+  num_batches: number;
+  lr: number;
+  ppo_epochs: number;
+  minibatch_size: number;
+  gamma: number;
+  gae_lambda: number;
+  clip_epsilon: number;
+  entropy_coef: number;
+  opponent: string;
+  device: string;
+}
+
+export interface PPOBatchEvent {
+  batch: number;
+  win_rate: number;
+  steps: number;
+  avg_game_length: number;
+  pg_loss: number;
+  v_loss: number;
+  entropy: number;
+  elapsed: number;
+}
+
+export const startPPO = (config: PPOConfig) =>
+  json('/ppo/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+
+export const stopPPO = () =>
+  json('/ppo/stop', { method: 'POST' });
+
+export const getPPOStatus = () =>
+  json<{ running: boolean; batch: number; total_batches: number; generation: string | null }>(
+    '/ppo/status'
+  );
+
+export function streamPPO(
+  onBatch: (e: PPOBatchEvent) => void,
+  onInfo: (msg: string) => void,
+  onDone: () => void,
+  onError: (err: string) => void,
+): () => void {
+  const es = new EventSource(`${BASE}/ppo/stream`);
+  es.addEventListener('batch', (e) => { onBatch(JSON.parse(e.data)); });
+  es.addEventListener('info', (e) => { onInfo(JSON.parse(e.data).message); });
+  es.addEventListener('done', () => { onDone(); es.close(); });
+  es.addEventListener('error', (e) => {
+    try { onError(JSON.parse((e as MessageEvent).data).message); } catch { /* ignore */ }
+  });
+  es.addEventListener('finished', () => { onDone(); es.close(); });
+  es.onerror = () => { onError('SSE connection error'); es.close(); };
+  return () => es.close();
+}
+
 // Health
 export const healthCheck = () => json<{ ok: boolean }>('/health');

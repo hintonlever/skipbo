@@ -8,6 +8,7 @@
 #include "ai/mcts_player.h"
 #include "ai/nn_mcts_player.h"
 #include "ai/nn_policy_player.h"
+#include "ai/ppo_player.h"
 #include "ai/nn_encoding.h"
 #include <vector>
 #include <random>
@@ -445,6 +446,20 @@ inline NeuralNet& global_nn() {
     return nn;
 }
 
+// Global PPO network for tournament use (type 7 players)
+inline PPONet& global_ppo() {
+    static PPONet net;
+    return net;
+}
+
+inline void wasm_load_ppo_weights(std::vector<float> actorWeights) {
+    global_ppo().load(actorWeights);
+}
+
+inline bool wasm_has_ppo_weights() {
+    return global_ppo().loaded();
+}
+
 inline void wasm_load_nn_weights(std::vector<float> valueWeights, std::vector<float> policyWeights) {
     global_nn().load_value_network(valueWeights);
     global_nn().load_policy_network(policyWeights);
@@ -456,7 +471,8 @@ inline bool wasm_has_nn_weights() {
 
 // Run a single AI vs AI match.
 // aiType: 0=random, 1=heuristic, 2=mcts, 3=heur+rand_discard,
-//         4=nn-mcts (value+policy), 5=nn-policy-only, 6=nn-mcts-value-only
+//         4=nn-mcts (value+policy), 5=nn-policy-only, 6=nn-mcts-value-only,
+//         7=ppo
 // Returns [winner, turns, p0StockRemaining, p1StockRemaining]
 inline std::vector<int> wasm_run_match(
     int p0Type, int p0Iters, int p0Dets, int p0Heuristic, int p0Rollout, int p0Tree,
@@ -497,6 +513,10 @@ inline std::vector<int> wasm_run_match(
                 cfg.use_policy = false;
                 (void)heuristic; (void)rollout;
                 return std::make_unique<NNMCTSPlayer>(s, cfg, global_nn());
+            }
+            case 7: {
+                (void)iters; (void)dets; (void)tree; (void)heuristic; (void)rollout;
+                return std::make_unique<PPOPlayer>(global_ppo());
             }
             default: return std::make_unique<RandomPlayer>(s);
         }

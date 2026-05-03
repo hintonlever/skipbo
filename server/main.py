@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import datasets, training, generations
+from .routers import datasets, training, generations, ppo_training
 from .utils.storage import ensure_dirs
 
 app = FastAPI(title="Skip-Bo NN Training Server")
@@ -16,6 +16,7 @@ app.add_middleware(
 app.include_router(datasets.router)
 app.include_router(training.router)
 app.include_router(generations.router)
+app.include_router(ppo_training.router)
 
 
 @app.on_event("startup")

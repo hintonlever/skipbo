@@ -32,6 +32,8 @@ interface WasmModule {
   ): WasmVectorInt;
   loadNNWeightsGlobal(valueWeights: WasmVectorFloat, policyWeights: WasmVectorFloat): void;
   hasNNWeightsGlobal(): boolean;
+  loadPPOWeightsGlobal(actorWeights: WasmVectorFloat): void;
+  hasPPOWeightsGlobal(): boolean;
 }
 
 let modulePromise: Promise<WasmModule> | null = null;
@@ -66,6 +68,17 @@ self.onmessage = async (e: MessageEvent) => {
       vw.delete();
       pw.delete();
       (self as unknown as Worker).postMessage({ type: 'weightsLoaded' });
+    } catch (err) {
+      (self as unknown as Worker).postMessage({ type: 'error', message: String(err) });
+    }
+  } else if (e.data.type === 'loadPPOWeights') {
+    try {
+      const module = await getModule();
+      const aw = new module.VectorFloat();
+      for (const v of e.data.actorWeights as number[]) aw.push_back(v);
+      module.loadPPOWeightsGlobal(aw);
+      aw.delete();
+      (self as unknown as Worker).postMessage({ type: 'ppoWeightsLoaded' });
     } catch (err) {
       (self as unknown as Worker).postMessage({ type: 'error', message: String(err) });
     }

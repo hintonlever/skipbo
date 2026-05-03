@@ -1,12 +1,62 @@
 #include "ai/random_player.h"
 #include "ai/heuristic_player.h"
 #include "ai/mcts_player.h"
+#include "ai/ppo_player.h"
 #include "tournament/tournament.h"
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <cstdlib>
 #include <string>
 
 using namespace skipbo;
+
+// Minimal JSON parsing: extract a flat float array from "key": [...]
+static std::vector<float> parse_json_float_array(const std::string& json, const std::string& key) {
+    std::vector<float> result;
+    std::string search = "\"" + key + "\"";
+    auto pos = json.find(search);
+    if (pos == std::string::npos) return result;
+
+    // Find opening bracket
+    pos = json.find('[', pos);
+    if (pos == std::string::npos) return result;
+    pos++; // skip '['
+
+    auto end = json.find(']', pos);
+    if (end == std::string::npos) return result;
+
+    std::string arr_str = json.substr(pos, end - pos);
+    std::istringstream iss(arr_str);
+    std::string token;
+    while (std::getline(iss, token, ',')) {
+        try {
+            result.push_back(std::stof(token));
+        } catch (...) {}
+    }
+    return result;
+}
+
+static PPONet load_ppo_weights(const std::string& path) {
+    std::ifstream f(path);
+    if (!f) {
+        std::cerr << "Error: cannot open PPO weights file: " << path << std::endl;
+        std::exit(1);
+    }
+    std::string json((std::istreambuf_iterator<char>(f)),
+                     std::istreambuf_iterator<char>());
+
+    auto weights = parse_json_float_array(json, "actor_network");
+    if (weights.empty()) {
+        std::cerr << "Error: no actor_network found in " << path << std::endl;
+        std::exit(1);
+    }
+
+    PPONet net;
+    net.load(weights);
+    std::cout << "Loaded PPO weights: " << weights.size() << " parameters from " << path << std::endl;
+    return net;
+}
 
 int main(int argc, char** argv) {
     int num_matches = 100;
@@ -15,6 +65,7 @@ int main(int argc, char** argv) {
     int turn_depth = 4;
     uint64_t seed = 12345;
     bool round_robin = false;
+    std::string ppo_weights_path;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -24,6 +75,7 @@ int main(int argc, char** argv) {
         else if (arg == "--turn-depth" && i + 1 < argc) turn_depth = std::atoi(argv[++i]);
         else if (arg == "--seed" && i + 1 < argc) seed = std::stoull(argv[++i]);
         else if (arg == "--round-robin") round_robin = true;
+        else if (arg == "--ppo" && i + 1 < argc) ppo_weights_path = argv[++i];
         else if (arg == "--help") {
             std::cout << "Usage: skipbo_tournament [options]\n"
                       << "  --matches N         Matches per pairing (default: 100)\n"
@@ -32,6 +84,7 @@ int main(int argc, char** argv) {
                       << "  --turn-depth N      Max turns per player in tree (default: 4)\n"
                       << "  --seed N            Random seed (default: 12345)\n"
                       << "  --round-robin       Compare: Random, Heuristic, MCTS variants\n"
+                      << "  --ppo PATH          Load PPO weights and include in tournament\n"
                       << "  --help              Show this help\n";
             return 0;
         }
@@ -48,7 +101,37 @@ int main(int argc, char** argv) {
         return MCTSPlayer(s, cfg);
     };
 
-    if (round_robin) {
+    if (!ppo_weights_path.empty()) {
+        // PPO mode: run PPO vs other players
+        auto ppo_net = load_ppo_weights(ppo_weights_path);
+        PPOPlayer ppo_player(ppo_net);
+
+        if (round_robin) {
+            RandomPlayer random_player(seed);
+            HeuristicPlayer heuristic_player;
+            auto mcts_d2 = make_mcts(seed + 1, 2);
+
+            struct { Player& a; Player& b; } pairings[] = {
+                {ppo_player, random_player},
+                {ppo_player, heuristic_player},
+                {ppo_player, mcts_d2},
+                {heuristic_player, random_player},
+            };
+
+            std::cout << "PPO Round-robin: " << num_matches << " matches per pairing\n" << std::endl;
+
+            for (auto& [a, b] : pairings) {
+                std::cout << "--- " << a.name() << " vs " << b.name() << " ---" << std::endl;
+                auto result = run_tournament(a, b, config, seed);
+                print_results(result, a.name(), b.name());
+            }
+        } else {
+            HeuristicPlayer heuristic_player;
+            std::cout << "Running " << num_matches << " games: PPO vs Heuristic\n" << std::endl;
+            auto result = run_tournament(ppo_player, heuristic_player, config, seed);
+            print_results(result, ppo_player.name(), heuristic_player.name());
+        }
+    } else if (round_robin) {
         RandomPlayer random_player(seed);
         HeuristicPlayer heuristic_player;
         auto mcts_d2 = make_mcts(seed + 1, 2);

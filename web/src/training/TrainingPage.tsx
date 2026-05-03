@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { DatasetPanel } from './DatasetPanel';
 import { TrainingPanel } from './TrainingPanel';
 import { GenerationGallery } from './GenerationGallery';
+import { PPOPanel } from './PPOPanel';
 import type { DatasetMeta, GenerationMeta } from './types';
 import * as api from './api';
 
@@ -128,6 +129,10 @@ uvicorn server.main:app --reload`}
             refreshGenerations();
           }}
         />
+      </div>
+
+      <div style={{ marginBottom: 24, borderTop: '1px solid #e5e7eb', paddingTop: 20 }}>
+        <PPOPanel onDone={refreshGenerations} />
       </div>
 
       <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 20 }}>
