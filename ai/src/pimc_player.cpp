@@ -21,7 +21,7 @@ struct PIMCNode {
     int parent = -1;
     Move move_from_parent{MoveSource::Hand0, MoveTarget::BuildingPile0};
     std::vector<int> children;
-    std::vector<Move> untried;
+    MoveList untried;
 };
 
 double evaluate_terminal(const GameState& state, int perspective) {
@@ -35,18 +35,20 @@ double evaluate_terminal(const GameState& state, int perspective) {
     return 0.0;
 }
 
-Move uniform_random_policy(const GameState&, const std::vector<Move>& moves, std::mt19937& rng) {
-    std::uniform_int_distribution<size_t> d(0, moves.size() - 1);
+Move uniform_random_policy(const GameState&, const MoveList& moves, std::mt19937& rng) {
+    std::uniform_int_distribution<int> d(0, moves.size() - 1);
     return moves[d(rng)];
 }
 
 double random_rollout(GameState state, int perspective, std::mt19937& rng,
-                      const PIMCRolloutPolicy& policy, int cap_turns) {
+                      const PIMCRolloutPolicy& policy, int cap_turns,
+                      MoveList& scratch) {
     int turns = 0;
     while (!state.game_over && turns < cap_turns) {
-        auto moves = get_legal_moves(state);
-        if (moves.empty()) break;  // no legal moves: treat as terminal-by-stock-count
-        Move m = policy(state, moves, rng);
+        scratch.clear();
+        get_legal_moves(state, scratch);
+        if (scratch.empty()) break;  // no legal moves: treat as terminal-by-stock-count
+        Move m = policy(state, scratch, rng);
         Game::apply_move_to_state(state, m, &rng);
         if (m.is_discard()) ++turns;
     }
@@ -66,17 +68,19 @@ public:
         if (root.terminal) {
             root.terminal_reward = evaluate_terminal(root.state, perspective_);
         } else {
-            root.untried = get_legal_moves(root.state);
+            get_legal_moves(root.state, root.untried);
         }
     }
 
     void run() {
+        MoveList rollout_scratch;
         for (int i = 0; i < cfg_.n_simulations; ++i) {
             int leaf = select_and_expand(0);
             double reward = nodes_[leaf].terminal
                 ? nodes_[leaf].terminal_reward
                 : random_rollout(nodes_[leaf].state, perspective_, rng_,
-                                 cfg_.rollout_policy, cfg_.rollout_cap_turns);
+                                 cfg_.rollout_policy, cfg_.rollout_cap_turns,
+                                 rollout_scratch);
             backprop(leaf, reward);
         }
     }
@@ -100,12 +104,12 @@ private:
     }
 
     int expand(int idx) {
-        // Pop a random untried move.
-        std::uniform_int_distribution<size_t> d(0, nodes_[idx].untried.size() - 1);
-        size_t pick = d(rng_);
+        // Pop a random untried move via swap-with-last.
+        int n = nodes_[idx].untried.size();
+        std::uniform_int_distribution<int> d(0, n - 1);
+        int pick = d(rng_);
         Move move = nodes_[idx].untried[pick];
-        nodes_[idx].untried[pick] = nodes_[idx].untried.back();
-        nodes_[idx].untried.pop_back();
+        nodes_[idx].untried.swap_erase(pick);
 
         GameState new_state = nodes_[idx].state;
         Game::apply_move_to_state(new_state, move, &rng_);
@@ -123,7 +127,7 @@ private:
         if (child.terminal) {
             child.terminal_reward = evaluate_terminal(child.state, perspective_);
         } else {
-            child.untried = get_legal_moves(child.state);
+            get_legal_moves(child.state, child.untried);
         }
         return child_idx;
     }
@@ -179,9 +183,18 @@ Move PIMCPlayer::choose_move(const GameState& observable, const std::vector<Move
     if (legal.size() == 1) return legal[0];
 
     int perspective = observable.current_player;
+    int n_legal = static_cast<int>(legal.size());
+
+    // Compact lookup: MoveSource has 10 values, MoveTarget 8 -> pack as src*8 + tgt (max 79).
+    std::array<int, 80> compact_index;
+    compact_index.fill(-1);
+    auto pack = [](const Move& m) {
+        return static_cast<int>(m.source) * 8 + static_cast<int>(m.target);
+    };
+    for (int i = 0; i < n_legal; ++i) compact_index[pack(legal[i])] = i;
 
     // Aggregate root-child visits and value across determinized worlds, indexed by `legal` index.
-    std::vector<std::pair<int, double>> agg(legal.size(), {0, 0.0});
+    std::vector<std::pair<int, double>> agg(n_legal, {0, 0.0});
 
     for (int w = 0; w < config_.n_worlds; ++w) {
         GameState world = Determinizer::sample(observable, perspective, rng_);
@@ -191,25 +204,23 @@ Move PIMCPlayer::choose_move(const GameState& observable, const std::vector<Move
         const auto& nodes = search.nodes();
         for (int ci : nodes[0].children) {
             const auto& c = nodes[ci];
-            for (size_t i = 0; i < legal.size(); ++i) {
-                if (legal[i] == c.move_from_parent) {
-                    agg[i].first += c.visits;
-                    agg[i].second += c.value_sum;
-                    break;
-                }
+            int slot = compact_index[pack(c.move_from_parent)];
+            if (slot >= 0) {
+                agg[slot].first += c.visits;
+                agg[slot].second += c.value_sum;
             }
         }
     }
 
     // Most-robust: pick by max aggregated visits. Tie-break on aggregated mean value.
     int best = 0;
-    for (size_t i = 1; i < legal.size(); ++i) {
+    for (int i = 1; i < n_legal; ++i) {
         if (agg[i].first > agg[best].first) {
-            best = static_cast<int>(i);
+            best = i;
         } else if (agg[i].first == agg[best].first) {
             double mi = agg[i].first > 0 ? agg[i].second / agg[i].first : 0.0;
             double mb = agg[best].first > 0 ? agg[best].second / agg[best].first : 0.0;
-            if (mi > mb) best = static_cast<int>(i);
+            if (mi > mb) best = i;
         }
     }
     return legal[best];

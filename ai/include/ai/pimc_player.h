@@ -1,16 +1,17 @@
 #pragma once
 
 #include "ai/player.h"
+#include "engine/move.h"
 #include <functional>
 #include <random>
 #include <string>
-#include <vector>
 
 namespace skipbo {
 
 // Pluggable rollout policy: pick a move from `legal_moves` in `state` using `rng`.
+// `legal_moves` is a MoveList for zero-allocation hot-path use.
 using PIMCRolloutPolicy = std::function<Move(const GameState& state,
-                                              const std::vector<Move>& legal_moves,
+                                              const MoveList& legal_moves,
                                               std::mt19937& rng)>;
 
 struct PIMCConfig {
